@@ -1,17 +1,39 @@
-# Caption Reviewer
+# Caption Reviewer + BBox Editor
 
-A tiny local web tool for manually reviewing image captions.
+A local web tool for reviewing **and editing** image captions — including full
+visual editing of bounding boxes for Ideogram-style structured JSON captions
+(`[y_min, x_min, y_max, x_max]`, coordinates 0–1000).
 
-It lets you:
+## What it does
 
-- Open a folder of images and matching `.txt` captions.
-- Rate each caption as `excellent`, `good enough`, `needs work`, `bad`, `terrible`, or `fixed`.
-- Filter and sort by status, including `unrated`.
-- Edit the caption text directly and save it back to the `.txt` file.
-- Preview bounding boxes over the image when the caption text contains JSON objects with `bbox` arrays.
-- Store review status separately in `.caption_review_state.json`, not inside the caption files.
+**Review** (the original workflow): open a folder of images and matching
+`.txt` captions, rate each (`excellent` … `terrible`, `fixed`), filter and
+sort by status. Review state lives in a sidecar `.caption_review_state.json`,
+never inside caption files.
 
-The caption files remain clean for training. The sidecar state file is only for review workflow metadata.
+**Edit boxes on the image** (new): boxes are drawn over the image and are
+fully interactive — click to select (smallest box wins, so tiny text boxes
+are reachable under full-frame ones), drag to move, pull the 8 handles to
+resize, press `B` and drag to draw a new box. Scroll to zoom, hold Space (or
+middle mouse) to pan, `F` to refit. A live crosshair readout shows the cursor
+in caption coordinates at all times, and arrow keys nudge the selected box by
+1 unit (Shift = 10).
+
+**Edit the caption as structured fields** (new): the Fields tab renders
+`high_level_description`, `style_description`, the scene `background`, and an
+element card for every entry in `compositional_deconstruction.elements` —
+type, description, color palette, and the four bbox numbers (labeled in the
+caption's own y-first order). Cards and canvas boxes select each other. Add,
+duplicate, and delete elements; "Draw box" on a card binds the next drawn
+rectangle to that element. The Raw JSON tab is always available and stays in
+sync. Plain-text captions still work exactly as before.
+
+**Keep files safe** (new): every edit goes through validation (coordinates
+clamped to range, inverted corners swapped, floats rounded — one click fixes
+all). Truncated JSON from cut-off captioner output is repaired automatically
+on load using the same algorithm as the training pipeline. The first save of
+any caption stores the untouched original under `.caption_backups/`, and
+Ctrl+Z / Ctrl+Shift+Z undo and redo structured edits.
 
 ## Expected folder layout
 
@@ -22,73 +44,52 @@ my_dataset/
   image002.png
   image002.txt
   .caption_review_state.json   # created by this tool
+  .caption_backups/            # originals, created on first save
 ```
 
 Captions are matched by stem: `image001.jpg` uses `image001.txt`.
 
-## Bounding box preview
+## Caption format
 
-If a caption file contains parseable JSON with `bbox` arrays, the reviewer overlays those boxes on the image while you edit. The default format is `[y_min, x_min, y_max, x_max]` with coordinates scaled from `0` to `1000`, matching the Ideogram-style captions this was built around. You can switch the viewer to `[x_min, y_min, x_max, y_max]` and change the coordinate max in the UI.
+The editor is built around Ideogram-style structured captions:
 
-The overlay is only a preview. Review status still lives in `.caption_review_state.json`, and the caption text file only changes when you save the caption editor.
+```json
+{
+  "high_level_description": "...",
+  "style_description": { "aesthetics": "...", "lighting": "...", "...": "..." },
+  "compositional_deconstruction": {
+    "background": "...",
+    "elements": [
+      { "type": "obj", "bbox": [y1, x1, y2, x2], "desc": "...", "color_palette": ["#D4AF37"] }
+    ]
+  }
+}
+```
+
+`bbox` values are integers from 0 to the coordinate max (default 1000),
+relative to the original image, stored `[y_min, x_min, y_max, x_max]`. The
+toolbar lets you switch the *interpretation* to `xyxy` and change the
+coordinate max if your captions differ; whatever is selected is used
+consistently for both display and editing. Saving from the Fields tab writes
+pretty-printed JSON by default (a minified option is next to Save); unknown
+keys in your captions are preserved untouched.
+
+## Keyboard shortcuts
+
+`1`–`6` rate · `[` / `]` previous / next · `Ctrl+S` save ·
+`V` select mode · `B` draw mode · `Esc` cancel / deselect ·
+arrows nudge box (Shift = ×10) · `Delete` remove selected element ·
+scroll zoom · Space-drag / middle-drag pan · `F` fit ·
+`Ctrl+Z` / `Ctrl+Shift+Z` undo / redo.
 
 ## Install with uv
-
-Install `uv` if needed:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-On Windows PowerShell:
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-Then run:
 
 ```bash
 uv sync
 uv run python app.py
 ```
 
-Open:
+Open `http://localhost:5062/`, paste your dataset folder path, hit
+**Open folder**.
 
-```text
-http://localhost:5062/
-```
-
-## Fallback install without uv
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
-```
-
-On Windows:
-
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-python app.py
-```
-
-## Keyboard shortcuts
-
-- `1`: Excellent
-- `2`: Good enough
-- `3`: Needs work
-- `4`: Bad
-- `5`: Terrible
-- `6`: Fixed
-- `Ctrl+S`: Save caption
-- `[` / `]`: Previous / next item
-- Double-click image preview: Toggle bounding box overlay
-
-## Notes
-
-This is a local-only convenience tool. It serves image files from whatever folder you open, so do not expose it to the public internet.
+(Plain pip works too: `pip install flask`, then `python app.py`.)

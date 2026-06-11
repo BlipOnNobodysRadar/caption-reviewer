@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Caption Reviewer</title>
+  <title>Caption Reviewer + BBox Editor</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -10,12 +10,15 @@
   <div class="app">
     <header class="topbar">
       <div>
-        <h1>Caption Reviewer</h1>
-        <p>Rate generated captions, edit caption files, preview JSON bounding boxes, and keep review state in a separate sidecar JSON file.</p>
+        <h1>Caption Reviewer + BBox Editor</h1>
+        <p>Rate captions, edit them as structured fields, and draw, move, and resize bounding boxes directly on the image.</p>
       </div>
       <div class="folder-controls">
         <input id="targetFolder" placeholder="/path/to/image_caption_folder">
         <label class="inline"><input type="checkbox" id="recursive"> recursive</label>
+        <label class="inline" title="First save of each caption stores the untouched original under .caption_backups/">
+          <input type="checkbox" id="backupOriginals" checked> backup originals
+        </label>
         <button id="openFolder">Open folder</button>
       </div>
     </header>
@@ -42,6 +45,10 @@
           <option value="modified">Recently modified</option>
         </select>
       </div>
+      <div class="row">
+        <label>Search</label>
+        <input id="searchBox" placeholder="filename or caption text">
+      </div>
       <div id="counts" class="counts">No folder loaded.</div>
     </section>
 
@@ -62,23 +69,40 @@
         <div id="reviewView" class="review-view hidden">
           <div class="media-card">
             <div class="media-toolbar">
-              <button id="prevItem">← Prev</button>
+              <button id="prevItem" title="Previous item ( [ )">&#8592; Prev</button>
               <div id="activeName" class="active-name"></div>
-              <button id="nextItem">Next →</button>
+              <button id="nextItem" title="Next item ( ] )">Next &#8594;</button>
             </div>
 
-            <div class="bbox-toolbar">
-              <label><input type="checkbox" id="showBboxes" checked> boxes</label>
-              <label><input type="checkbox" id="bboxLabels" checked> labels</label>
-              <label><input type="checkbox" id="bboxFill"> fill</label>
-              <label>format
-                <select id="bboxFormat">
-                  <option value="yxyx" selected>[y_min, x_min, y_max, x_max]</option>
-                  <option value="xyxy">[x_min, y_min, x_max, y_max]</option>
-                </select>
-              </label>
-              <label>coord max <input id="bboxCoordMax" type="number" value="1000" min="1"></label>
-              <span id="bboxStatus" class="bbox-status">No boxes</span>
+            <div class="canvas-toolbar">
+              <div class="tool-group">
+                <button id="modeSelectBtn" class="active" title="Select / move / resize boxes (V)">Select</button>
+                <button id="modeDrawBtn" title="Draw new boxes; stays active until Esc (B)">Draw</button>
+                <button id="addElementBtn" title="Add a new element, then draw its box">+ Element</button>
+              </div>
+              <div class="tool-group">
+                <button id="zoomOutBtn" title="Zoom out">&#8722;</button>
+                <span id="zoomLabel" class="zoom-label">100%</span>
+                <button id="zoomInBtn" title="Zoom in">+</button>
+                <button id="fitBtn" title="Fit image to view (F)">Fit</button>
+              </div>
+              <div class="tool-group toggles">
+                <label><input type="checkbox" id="showBboxes" checked> boxes</label>
+                <label><input type="checkbox" id="bboxLabels" checked> labels</label>
+                <label><input type="checkbox" id="bboxFill"> fill</label>
+                <label><input type="checkbox" id="focusMode"> dim others</label>
+              </div>
+              <div class="tool-group">
+                <label>format
+                  <select id="bboxFormat" title="How stored bbox arrays are interpreted, for display and editing">
+                    <option value="yxyx" selected>[y1, x1, y2, x2]</option>
+                    <option value="xyxy">[x1, y1, x2, y2]</option>
+                  </select>
+                </label>
+                <label>max <input id="bboxCoordMax" type="number" value="1000" min="1" title="Coordinate range maximum"></label>
+              </div>
+              <span id="coordReadout" class="coord-readout" title="Cursor position in caption coordinates"></span>
+              <button id="issuesChip" class="issues-chip hidden" title="Click to fix all fixable boxes"></button>
             </div>
 
             <div class="image-wrap" id="imageWrap">
@@ -97,21 +121,87 @@
               <button id="clearStatus">Clear</button>
             </div>
 
-            <div class="caption-head">
-              <strong>Caption</strong>
-              <span id="captionPath"></span>
+            <div class="tabs">
+              <button id="tabFieldsBtn" class="tab active">Fields</button>
+              <button id="tabRawBtn" class="tab">Raw JSON</button>
             </div>
-            <textarea id="captionText" spellcheck="false"></textarea>
+
+            <div id="fieldsPanel" class="fields-panel">
+              <div id="fieldsNotice" class="notice hidden">
+                <span id="fieldsNoticeText"></span>
+                <button id="convertBtn" class="hidden">Convert to structured caption</button>
+              </div>
+
+              <label class="fld">High-level description
+                <textarea id="fld_hld" rows="3" spellcheck="false"></textarea>
+              </label>
+
+              <div class="fld-grid">
+                <label class="fld">Aesthetics
+                  <textarea id="fld_aesthetics" rows="2" spellcheck="false"></textarea>
+                </label>
+                <label class="fld">Lighting
+                  <textarea id="fld_lighting" rows="2" spellcheck="false"></textarea>
+                </label>
+                <label class="fld">Art style
+                  <textarea id="fld_art" rows="2" spellcheck="false"></textarea>
+                </label>
+                <label class="fld">Medium
+                  <input id="fld_medium" spellcheck="false">
+                </label>
+              </div>
+
+              <label class="fld">Style palette
+                <input id="fld_stylePalette" placeholder="#D4AF37, #FFFFFF" spellcheck="false">
+              </label>
+
+              <label class="fld">Background
+                <textarea id="fld_background" rows="2" spellcheck="false"></textarea>
+              </label>
+
+              <div class="elements-head">
+                <strong>Elements</strong>
+                <span id="elementsCount" class="muted">0</span>
+                <span class="muted hint">click a card or a box to select; Draw box binds the next drag</span>
+              </div>
+              <div id="elementsList" class="elements-list"></div>
+            </div>
+
+            <div id="rawPanel" class="raw-panel hidden">
+              <div class="caption-head">
+                <strong>Caption file</strong>
+                <span id="captionPath"></span>
+              </div>
+              <textarea id="captionText" spellcheck="false"></textarea>
+              <div class="raw-actions">
+                <button id="rawApplyBtn">Apply JSON to fields</button>
+                <span id="rawStatus" class="raw-status"></span>
+              </div>
+            </div>
 
             <div class="actions">
+              <label class="inline">save as
+                <select id="saveFormat">
+                  <option value="pretty" selected>pretty JSON</option>
+                  <option value="minified">minified</option>
+                </select>
+              </label>
               <button id="saveCaption">Save caption</button>
-              <button id="saveFixed" class="primary">Save caption + mark fixed</button>
+              <button id="saveFixed" class="primary">Save + mark fixed</button>
               <span id="saveStatus"></span>
             </div>
 
             <details class="help">
               <summary>Keyboard shortcuts</summary>
-              <p><kbd>1</kbd> excellent, <kbd>2</kbd> good enough, <kbd>3</kbd> needs work, <kbd>4</kbd> bad, <kbd>5</kbd> terrible, <kbd>6</kbd> fixed. <kbd>Ctrl</kbd>+<kbd>S</kbd> saves. <kbd>[</kbd>/<kbd>]</kbd> moves previous/next.</p>
+              <p>
+                <kbd>1</kbd>&#8211;<kbd>6</kbd> rate &middot; <kbd>[</kbd> / <kbd>]</kbd> prev / next &middot;
+                <kbd>Ctrl</kbd>+<kbd>S</kbd> save &middot;
+                <kbd>V</kbd> select &middot; <kbd>B</kbd> draw &middot; <kbd>Esc</kbd> cancel / deselect &middot;
+                arrows nudge selected box (<kbd>Shift</kbd> = &times;10) &middot;
+                <kbd>Delete</kbd> remove selected element &middot;
+                scroll zoom &middot; <kbd>Space</kbd>-drag or middle-drag pan &middot; double-click or <kbd>F</kbd> fit &middot;
+                <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> undo / redo.
+              </p>
             </details>
           </div>
         </div>
@@ -119,6 +209,7 @@
     </main>
   </div>
 
+  <script src="/static/bbox_core.js"></script>
   <script src="/static/script.js"></script>
 </body>
 </html>

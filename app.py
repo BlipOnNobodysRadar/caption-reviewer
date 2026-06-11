@@ -121,6 +121,25 @@ def write_caption(image_path: Path, caption: str) -> Path:
     return caption_path
 
 
+BACKUP_DIRNAME = ".caption_backups"
+
+
+def backup_original_caption(root: Path, caption_path: Path) -> Path | None:
+    """One-time copy of the pre-edit caption into .caption_backups/<rel>.
+
+    Only the first save of a given caption file creates a backup, so the
+    backup always holds the original (pre-tool) text."""
+    if not caption_path.exists():
+        return None
+    rel = caption_path.relative_to(root)
+    dest = root / BACKUP_DIRNAME / rel
+    if dest.exists():
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(caption_path.read_bytes())
+    return dest
+
+
 def caption_preview(text: str, limit: int = 180) -> str:
     text = " ".join(text.strip().split())
     if len(text) <= limit:
@@ -130,7 +149,10 @@ def caption_preview(text: str, limit: int = 180) -> str:
 
 def scan_images(root: Path, recursive: bool) -> list[Path]:
     iterator = root.rglob("*") if recursive else root.iterdir()
-    out = [p for p in iterator if p.is_file() and allowed_image(p)]
+    out = [
+        p for p in iterator
+        if p.is_file() and allowed_image(p) and BACKUP_DIRNAME not in p.parts
+    ]
     out.sort(key=lambda p: str(p.relative_to(root)).lower())
     return out
 
@@ -302,6 +324,13 @@ def save_caption():
     if not image_path.exists() or not allowed_image(image_path):
         return jsonify({"error": "Image not found."}), 404
 
+    backed_up = None
+    if bool(data.get("backup", True)):
+        try:
+            backed_up = backup_original_caption(root, image_to_caption_path(image_path))
+        except Exception:
+            backed_up = None
+
     caption_path = write_caption(image_path, caption)
 
     state = load_state(root)
@@ -319,6 +348,7 @@ def save_caption():
             "rel": rel,
             "caption_path": str(caption_path),
             "status": normalize_status(entry.get("status")) or "unrated",
+            "backup": str(backed_up) if backed_up else None,
         }
     )
 
