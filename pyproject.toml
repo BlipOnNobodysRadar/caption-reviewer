@@ -1,0 +1,11 @@
+[project]
+name = "caption-reviewer"
+version = "0.1.0"
+description = "Local web UI for reviewing, rating, and editing image caption files."
+requires-python = ">=3.10"
+dependencies = [
+    "flask==3.0.3",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,252 @@
+:root {
+  --bg: #0f1115;
+  --panel: #151923;
+  --panel2: #0d0f16;
+  --text: #d7d9e0;
+  --muted: #8a90a6;
+  --border: #252b3c;
+  --accent: #5ea0ff;
+  --good: #51d88a;
+  --warn: #ffd166;
+  --bad: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, sans-serif;
+}
+
+button, input, select, textarea { font: inherit; }
+button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #1b2232;
+  color: var(--text);
+  padding: 8px 10px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+button:disabled { opacity: .6; cursor: default; }
+input, select, textarea {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.app { padding: 14px; }
+.topbar {
+  display: grid;
+  grid-template-columns: 1fr minmax(360px, 680px);
+  gap: 16px;
+  align-items: end;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+.topbar h1 { margin: 0 0 4px; font-size: 22px; }
+.topbar p { margin: 0; color: var(--muted); }
+.folder-controls { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
+.inline { color: var(--muted); white-space: nowrap; }
+
+.controls {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 180px 180px 1fr;
+  gap: 12px;
+  align-items: end;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+.row { display: grid; gap: 5px; }
+.row label { color: var(--muted); font-size: 13px; }
+.counts { color: var(--muted); overflow-wrap: anywhere; }
+
+.workspace {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 390px 1fr;
+  gap: 12px;
+  height: calc(100vh - 180px);
+  min-height: 600px;
+}
+.list-pane, .review-pane {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+.list-pane { display: flex; flex-direction: column; }
+.list-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.item-list { overflow: auto; padding: 8px; }
+.item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 8px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-left-width: 5px;
+}
+.item.active { outline: 2px solid var(--accent); }
+.item-main { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { flex: none; color: var(--muted); font-size: 12px; }
+.sub, .preview { color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+.preview { max-height: 48px; overflow: hidden; }
+.empty-list { color: var(--muted); padding: 10px; }
+
+.st-unrated { border-left-color: #7a8194; }
+.st-excellent { border-left-color: #51d88a; }
+.st-good-enough { border-left-color: #8bd17c; }
+.st-needs-work { border-left-color: #ffd166; }
+.st-bad { border-left-color: #ff9f1c; }
+.st-terrible { border-left-color: #ff6b6b; }
+.st-fixed { border-left-color: #5ea0ff; }
+
+.review-pane { padding: 12px; overflow: auto; }
+.empty-state {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  text-align: center;
+}
+.hidden { display: none !important; }
+.review-view {
+  display: grid;
+  grid-template-columns: minmax(380px, 58%) minmax(360px, 42%);
+  gap: 12px;
+  min-height: 100%;
+}
+.media-card, .editor-card {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  min-width: 0;
+}
+.media-toolbar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.active-name {
+  color: var(--muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.image-wrap canvas {
+  display: block;
+  max-width: none;
+  max-height: none;
+  background: #050608;
+  border-radius: 4px;
+  box-shadow: 0 10px 32px #0008;
+}
+.bbox-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.bbox-toolbar label {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  white-space: nowrap;
+}
+.bbox-toolbar select, .bbox-toolbar input[type="number"] {
+  padding: 5px 6px;
+  font-size: 12px;
+}
+.bbox-toolbar input[type="number"] { width: 80px; }
+.bbox-status {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.bbox-status.error { color: var(--bad); }
+
+.image-wrap {
+  height: calc(100vh - 300px);
+  min-height: 420px;
+  display: grid;
+  place-items: center;
+  background: #090b10;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: auto;
+}
+.rating-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.rating-row button.selected { outline: 2px solid var(--accent); }
+.caption-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.caption-head span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+#captionText {
+  width: 100%;
+  height: calc(100vh - 380px);
+  min-height: 320px;
+  resize: vertical;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+#saveStatus { color: var(--muted); }
+#saveStatus.error { color: var(--bad); }
+.help { margin-top: 12px; color: var(--muted); }
+kbd {
+  background: #22283a;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text);
+}
+
+@media (max-width: 1100px) {
+  .topbar, .controls, .workspace, .review-view { grid-template-columns: 1fr; }
+  .workspace { height: auto; }
+  .list-pane { max-height: 360px; }
+  .image-wrap { height: 55vh; }
+}

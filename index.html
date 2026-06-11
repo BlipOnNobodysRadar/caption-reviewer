@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Caption Reviewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>Caption Reviewer</h1>
+        <p>Rate generated captions, edit caption files, preview JSON bounding boxes, and keep review state in a separate sidecar JSON file.</p>
+      </div>
+      <div class="folder-controls">
+        <input id="targetFolder" placeholder="/path/to/image_caption_folder">
+        <label class="inline"><input type="checkbox" id="recursive"> recursive</label>
+        <button id="openFolder">Open folder</button>
+      </div>
+    </header>
+
+    <section class="controls">
+      <div class="row">
+        <label>Status filter</label>
+        <select id="statusFilter">
+          <option value="all">All</option>
+          <option value="unrated">Unrated</option>
+          <option value="excellent">Excellent</option>
+          <option value="good_enough">Good enough</option>
+          <option value="needs_work">Needs work</option>
+          <option value="bad">Bad</option>
+          <option value="terrible">Terrible</option>
+          <option value="fixed">Fixed</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Sort</label>
+        <select id="sortBy">
+          <option value="status">Status groups</option>
+          <option value="filename">Filename</option>
+          <option value="modified">Recently modified</option>
+        </select>
+      </div>
+      <div id="counts" class="counts">No folder loaded.</div>
+    </section>
+
+    <main class="workspace">
+      <aside class="list-pane">
+        <div class="list-head">
+          <strong id="listTitle">Items</strong>
+          <span id="listCount">0</span>
+        </div>
+        <div id="itemList" class="item-list"></div>
+      </aside>
+
+      <section class="review-pane">
+        <div id="emptyState" class="empty-state">
+          Open a folder containing images and matching <code>.txt</code> caption files.
+        </div>
+
+        <div id="reviewView" class="review-view hidden">
+          <div class="media-card">
+            <div class="media-toolbar">
+              <button id="prevItem">← Prev</button>
+              <div id="activeName" class="active-name"></div>
+              <button id="nextItem">Next →</button>
+            </div>
+
+            <div class="bbox-toolbar">
+              <label><input type="checkbox" id="showBboxes" checked> boxes</label>
+              <label><input type="checkbox" id="bboxLabels" checked> labels</label>
+              <label><input type="checkbox" id="bboxFill"> fill</label>
+              <label>format
+                <select id="bboxFormat">
+                  <option value="yxyx" selected>[y_min, x_min, y_max, x_max]</option>
+                  <option value="xyxy">[x_min, y_min, x_max, y_max]</option>
+                </select>
+              </label>
+              <label>coord max <input id="bboxCoordMax" type="number" value="1000" min="1"></label>
+              <span id="bboxStatus" class="bbox-status">No boxes</span>
+            </div>
+
+            <div class="image-wrap" id="imageWrap">
+              <canvas id="imageCanvas"></canvas>
+            </div>
+          </div>
+
+          <div class="editor-card">
+            <div class="rating-row" id="ratingButtons">
+              <button data-status="excellent">1 Excellent</button>
+              <button data-status="good_enough">2 Good enough</button>
+              <button data-status="needs_work">3 Needs work</button>
+              <button data-status="bad">4 Bad</button>
+              <button data-status="terrible">5 Terrible</button>
+              <button data-status="fixed">6 Fixed</button>
+              <button id="clearStatus">Clear</button>
+            </div>
+
+            <div class="caption-head">
+              <strong>Caption</strong>
+              <span id="captionPath"></span>
+            </div>
+            <textarea id="captionText" spellcheck="false"></textarea>
+
+            <div class="actions">
+              <button id="saveCaption">Save caption</button>
+              <button id="saveFixed" class="primary">Save caption + mark fixed</button>
+              <span id="saveStatus"></span>
+            </div>
+
+            <details class="help">
+              <summary>Keyboard shortcuts</summary>
+              <p><kbd>1</kbd> excellent, <kbd>2</kbd> good enough, <kbd>3</kbd> needs work, <kbd>4</kbd> bad, <kbd>5</kbd> terrible, <kbd>6</kbd> fixed. <kbd>Ctrl</kbd>+<kbd>S</kbd> saves. <kbd>[</kbd>/<kbd>]</kbd> moves previous/next.</p>
+            </details>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
