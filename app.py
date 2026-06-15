@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import time
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -602,6 +603,51 @@ def media(rel: str):
     return send_file(image_path)
 
 
+# Small thumbnails for the item list. Generated with Pillow and cached in memory,
+# keyed by (rel, mtime) so an edited/replaced image refreshes automatically. If
+# Pillow is unavailable or an image cannot be decoded, the full image is served
+# instead, so the list still works (just heavier).
+THUMB_MAX_EDGE = 96
+_THUMB_CACHE: dict[str, tuple[float, bytes, str]] = {}
+_THUMB_CACHE_LIMIT = 2048
+
+
+def make_thumbnail(path: Path) -> tuple[bytes, str] | None:
+    if not HAVE_PIL:
+        return None
+    try:
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            im.thumbnail((THUMB_MAX_EDGE, THUMB_MAX_EDGE), _lanczos_filter())
+            buf = BytesIO()
+            im.save(buf, format="JPEG", quality=80)
+            return buf.getvalue(), "image/jpeg"
+    except Exception:
+        return None
+
+
+@app.route("/thumb/<path:rel>")
+def thumb(rel: str):
+    image_path = safe_resolve_under_root(rel)
+    if not image_path.exists() or not image_path.is_file() or not allowed_image(image_path):
+        return jsonify({"error": "Image not found."}), 404
+    try:
+        mtime = image_path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    cached = _THUMB_CACHE.get(rel)
+    if cached and cached[0] == mtime:
+        return app.response_class(cached[1], mimetype=cached[2])
+    made = make_thumbnail(image_path)
+    if made is None:
+        return send_file(image_path)
+    data, mimetype = made
+    if len(_THUMB_CACHE) >= _THUMB_CACHE_LIMIT:
+        _THUMB_CACHE.clear()
+    _THUMB_CACHE[rel] = (mtime, data, mimetype)
+    return app.response_class(data, mimetype=mimetype)
+
+
 @app.route("/api/state-file", methods=["GET"])
 def get_state_file():
     root = require_root()
@@ -716,4 +762,13 @@ def media_b(rel: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5062, debug=True)
+    # Local-only by default. This tool reads and writes files anywhere on your
+    # machine and has no authentication, so it must not be reachable from the
+    # network. Binding to 0.0.0.0 and/or enabling Flask's debugger would expose
+    # an arbitrary-code-execution surface to anyone who can reach the port. Only
+    # opt in if you understand that, e.g. on a trusted LAN:
+    #   CAPTION_REVIEWER_HOST=0.0.0.0 CAPTION_REVIEWER_DEBUG=1 python app.py
+    host = os.environ.get("CAPTION_REVIEWER_HOST", "127.0.0.1")
+    port = int(os.environ.get("CAPTION_REVIEWER_PORT", "5062"))
+    debug = os.environ.get("CAPTION_REVIEWER_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+    app.run(host=host, port=port, debug=debug)

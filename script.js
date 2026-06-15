@@ -32,6 +32,8 @@ const rawApplyBtn = $('rawApplyBtn'), rawStatus = $('rawStatus');
 const saveFormat = $('saveFormat'), saveCaptionBtn = $('saveCaption'), saveFixedBtn = $('saveFixed');
 const removePairBtn = $('removePair'), deletePairBtn = $('deletePair');
 const saveStatus = $('saveStatus');
+const saveNextBtn = $('saveNext'), advanceOnRate = $('advanceOnRate');
+const posIndicator = $('posIndicator'), recentFoldersList = $('recentFolders');
 /* layout: app-bar toggles, slide-in drawers, floating hover tooltip */
 const browseToggle = $('browseToggle'), editorToggle = $('editorToggle');
 const browseClose = $('browseClose'), editorClose = $('editorClose');
@@ -52,6 +54,11 @@ let view = { scale: 1, ox: 0, oy: 0 };
 let img = new Image(), imgLoaded = false;
 let drag = null, spaceHeld = false, lastPointer = null, lastKeyWasArrow = false;
 let undoStack = [], redoStack = [];
+
+/* recent folders + last-session restore (persisted in localStorage prefs) */
+let recentFolders = [];
+let lastOpenedFolder = '';
+let lastPrefs = {};
 
 const statusLabels = {
   all: 'All', unrated: 'Unrated', excellent: 'Excellent', good_enough: 'Good enough',
@@ -85,22 +92,58 @@ function markDirty() {
 }
 
 /* prefs */
+const PREFS_KEY = 'caption_reviewer_prefs';
 function loadPrefs() {
-  try {
-    const p = JSON.parse(localStorage.getItem('caption_reviewer_prefs') || '{}');
-    if (p.order) bboxFormat.value = p.order;
-    if (p.coordMax) bboxCoordMax.value = p.coordMax;
-    if (p.saveFormat) saveFormat.value = p.saveFormat;
-    if (typeof p.backup === 'boolean') backupOriginals.checked = p.backup;
-    if (typeof p.focus === 'boolean') focusMode.checked = p.focus;
-  } catch (e) { /* ignore */ }
+  let p = {};
+  try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (e) { p = {}; }
+  lastPrefs = p || {};
+  if (p.order) bboxFormat.value = p.order;
+  if (p.coordMax) bboxCoordMax.value = p.coordMax;
+  if (p.saveFormat) saveFormat.value = p.saveFormat;
+  if (typeof p.backup === 'boolean') backupOriginals.checked = p.backup;
+  if (typeof p.focus === 'boolean') focusMode.checked = p.focus;
+  if (typeof p.showBboxes === 'boolean') showBboxes.checked = p.showBboxes;
+  if (typeof p.bboxLabels === 'boolean') bboxLabels.checked = p.bboxLabels;
+  if (typeof p.bboxFill === 'boolean') bboxFill.checked = p.bboxFill;
+  if (typeof p.advanceOnRate === 'boolean') advanceOnRate.checked = p.advanceOnRate;
+  if (p.statusFilter) statusFilter.value = p.statusFilter;
+  if (p.sortBy) sortBy.value = p.sortBy;
+  if (typeof p.recursive === 'boolean') recursive.checked = p.recursive;
+  if (typeof p.search === 'string') searchBox.value = p.search;
+  if (Array.isArray(p.recentFolders)) recentFolders = p.recentFolders.filter((x) => typeof x === 'string');
+  if (p.lastFolder && !targetFolder.value) targetFolder.value = p.lastFolder;
+  renderRecentFolders();
 }
-const savePrefs = debounce(() => {
-  localStorage.setItem('caption_reviewer_prefs', JSON.stringify({
-    order: bboxFormat.value, coordMax: bboxCoordMax.value,
-    saveFormat: saveFormat.value, backup: backupOriginals.checked, focus: focusMode.checked
-  }));
-}, 200);
+function writePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      order: bboxFormat.value, coordMax: bboxCoordMax.value, saveFormat: saveFormat.value,
+      backup: backupOriginals.checked, focus: focusMode.checked,
+      showBboxes: showBboxes.checked, bboxLabels: bboxLabels.checked, bboxFill: bboxFill.checked,
+      advanceOnRate: advanceOnRate.checked,
+      statusFilter: statusFilter.value, sortBy: sortBy.value, recursive: recursive.checked,
+      search: searchBox.value, recentFolders: recentFolders.slice(0, 10),
+      lastFolder: lastOpenedFolder || targetFolder.value || '', lastActiveRel: activeRel || ''
+    }));
+  } catch (e) { /* ignore (private mode / quota) */ }
+}
+const savePrefs = debounce(writePrefs, 200);
+function renderRecentFolders() {
+  if (!recentFoldersList) return;
+  recentFoldersList.innerHTML = '';
+  for (const path of recentFolders) {
+    const opt = document.createElement('option');
+    opt.value = path;
+    recentFoldersList.appendChild(opt);
+  }
+}
+function rememberFolder(path) {
+  if (!path) return;
+  lastOpenedFolder = path;
+  recentFolders = [path, ...recentFolders.filter((p) => p !== path)].slice(0, 10);
+  renderRecentFolders();
+  writePrefs();
+}
 
 /* ---------------- undo / redo ---------------- */
 function snapshot() { return doc ? JSON.stringify(doc) : null; }
@@ -143,35 +186,59 @@ function renderCounts(counts) {
     .map((k) => `${statusLabels[k]}: ${counts[k] || 0}`);
   countsEl.textContent = parts.join(' \u00b7 ');
 }
-function renderList() {
-  listEl.innerHTML = '';
+/* the item list after status filter (server-side), compare filter, and search (client-side) */
+function visibleItems() {
   const q = searchBox.value.trim().toLowerCase();
   let base = items;
   if (compareActive && compareFilter.value !== 'all') {
     base = items.filter((it) => compareFilter.value === 'matched' ? !!matchMap[it.rel] : !matchMap[it.rel]);
   }
-  const visible = q
+  return q
     ? base.filter((it) => it.rel.toLowerCase().includes(q) || (it.caption_preview || '').toLowerCase().includes(q))
     : base;
-  listCountEl.textContent = (q || base !== items) ? `${visible.length}/${items.length}` : String(items.length);
+}
+function encRel(rel) { return rel.split('/').map(encodeURIComponent).join('/'); }
+function relVersion(rel) {
+  const it = items.find((x) => x.rel === rel);
+  return Math.floor((it && it.image_mtime) || 0);   // cache key: changes only if the file changes
+}
+function mediaUrl(rel) { return '/media/' + encRel(rel) + '?v=' + relVersion(rel); }
+function thumbUrl(rel) { return '/thumb/' + encRel(rel) + '?v=' + relVersion(rel); }
+function updatePosIndicator() {
+  if (!posIndicator) return;
+  const vis = visibleItems();
+  const i = activeRel ? vis.findIndex((x) => x.rel === activeRel) : -1;
+  posIndicator.textContent = (i >= 0) ? `${i + 1} / ${vis.length}` : (vis.length ? `${vis.length}` : '');
+}
+function renderList(scrollActive = false) {
+  listEl.innerHTML = '';
+  const visible = visibleItems();
+  listCountEl.textContent = (visible.length !== items.length) ? `${visible.length}/${items.length}` : String(items.length);
+  updatePosIndicator();
   if (!visible.length) {
     const div = document.createElement('div');
     div.className = 'empty-list';
-    div.textContent = items.length ? 'No items match the search.' : 'No matching images.';
+    div.textContent = items.length ? 'No items match the current filter or search.' : 'No matching images.';
     listEl.appendChild(div);
     return;
   }
+  let activeEl = null;
   for (const item of visible) {
     const div = document.createElement('button');
     div.className = `item ${statusClasses[item.status] || ''}`;
-    if (item.rel === activeRel) div.classList.add('active');
+    if (item.rel === activeRel) { div.classList.add('active'); activeEl = div; }
     div.innerHTML = `
-      <div class="item-main">
-        <span class="name" title="${escapeText(item.rel)}">${escapeText(item.filename)}</span>
-        <span class="badge">${escapeText(item.status_label)}</span>
-      </div>
-      <div class="sub" title="${escapeText(item.rel)}">${escapeText(item.folder)}</div>
-      <div class="preview">${escapeText(item.caption_preview || '(no caption file)')}</div>`;
+      <img class="item-thumb" loading="lazy" alt="" src="${thumbUrl(item.rel)}">
+      <div class="item-body">
+        <div class="item-main">
+          <span class="name" title="${escapeText(item.rel)}">${escapeText(item.filename)}</span>
+          <span class="badge">${escapeText(item.status_label)}</span>
+        </div>
+        <div class="sub" title="${escapeText(item.rel)}">${escapeText(item.folder)}</div>
+        <div class="preview">${escapeText(item.caption_preview || '(no caption file)')}</div>
+      </div>`;
+    const thumbImg = div.querySelector('.item-thumb');
+    if (thumbImg) thumbImg.addEventListener('error', () => { thumbImg.style.visibility = 'hidden'; });
     div.addEventListener('click', () => loadItem(item.rel));
     if (compareActive) {
       const m = matchMap[item.rel];
@@ -186,10 +253,12 @@ function renderList() {
     }
     listEl.appendChild(div);
   }
+  if (scrollActive === true && activeEl) activeEl.scrollIntoView({ block: 'nearest' });
 }
-async function openFolder() {
+async function openFolder(opts = {}) {
   const folder = targetFolder.value.trim();
   if (!folder) return;
+  if (!opts.silent && dirty && !confirm('Caption has unsaved changes. Discard them and open a different folder?')) return;
   openFolderBtn.disabled = true;
   openFolderBtn.textContent = 'Opening...';
   try {
@@ -199,14 +268,29 @@ async function openFolder() {
     });
     const out = await res.json();
     if (out.error) throw new Error(out.error);
+    dirty = false; rawDirtyPending = false;
     items = out.items || [];
     resetCompareForNewFolder();
     activeRel = null; activeIndex = -1;
     renderCounts(out.counts);
-    renderList();
-    if (items.length) await loadItem(items[0].rel);
+    rememberFolder(folder);
+    // open-folder always returns the default (status-grouped, unfiltered) view, so
+    // re-apply the persisted/selected status filter and sort when they differ.
+    if (statusFilter.value !== 'all' || sortBy.value !== 'status') {
+      await refreshList(false);
+    } else {
+      renderList();
+    }
+    const vis = visibleItems();
+    let target = null;
+    if (opts.preferRel) {
+      target = vis.find((x) => x.rel === opts.preferRel) || items.find((x) => x.rel === opts.preferRel);
+    }
+    if (!target) target = vis[0] || items[0] || null;
+    if (target) await loadItem(target.rel);
   } catch (e) {
-    alert('Error: ' + e.message);
+    if (opts.silent) setMessage('Could not reopen the last folder (it may have moved).', true);
+    else alert('Error: ' + e.message);
   } finally {
     openFolderBtn.disabled = false;
     openFolderBtn.textContent = 'Open folder';
@@ -226,10 +310,21 @@ async function refreshList(keepActive = true) {
   renderList();
 }
 function move(delta) {
-  if (!items.length) return;
-  const idx = activeIndex >= 0 ? activeIndex : 0;
-  const next = Math.max(0, Math.min(items.length - 1, idx + delta));
-  if (items[next]) loadItem(items[next].rel);
+  const vis = visibleItems();
+  if (!vis.length) return;
+  let idx = vis.findIndex((x) => x.rel === activeRel);
+  idx = (idx < 0) ? 0 : Math.max(0, Math.min(vis.length - 1, idx + delta));
+  if (vis[idx]) loadItem(vis[idx].rel);
+}
+function moveToNextUnrated() {
+  const vis = visibleItems();
+  if (!vis.length) return;
+  const start = vis.findIndex((x) => x.rel === activeRel);
+  for (let step = 1; step <= vis.length; step++) {
+    const it = vis[((start < 0 ? -1 : start) + step) % vis.length];
+    if (it && it.status === 'unrated') { loadItem(it.rel); return; }
+  }
+  setMessage('No unrated items in the current list.');
 }
 
 /* ---------------- ratings ---------------- */
@@ -240,6 +335,14 @@ function updateButtons(status) {
 }
 async function setStatus(status) {
   if (!activeRel) return;
+  // Capture the next item up front: rating can re-sort the list (status grouping),
+  // so "next" should mean the item that was after this one at rating time.
+  let nextRel = null;
+  if (advanceOnRate.checked) {
+    const vis = visibleItems();
+    const idx = vis.findIndex((x) => x.rel === activeRel);
+    if (idx >= 0 && idx + 1 < vis.length) nextRel = vis[idx + 1].rel;
+  }
   const res = await fetch('/api/status', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ rel: activeRel, status })
@@ -250,6 +353,7 @@ async function setStatus(status) {
   await refreshList(true);
   updateButtons(status);
   activeName.textContent = `${activeRel.split('/').pop()} \u2014 ${out.status_label}`;
+  if (nextRel) loadItem(nextRel);
 }
 async function clearStatus() {
   if (!activeRel) return;
@@ -277,7 +381,7 @@ async function loadItem(rel) {
   captionPath.textContent = out.caption_path || '';
   emptyState.classList.add('hidden');
   reviewView.classList.remove('hidden');
-  renderList();
+  renderList(true);
   updateButtons(out.status);
 
   setCaptionState(out.caption || '');
@@ -289,7 +393,14 @@ async function loadItem(rel) {
   const next = new Image();
   next.onload = () => { img = next; imgLoaded = true; resizeCanvas(); fitView(); draw(); };
   next.onerror = () => { imgLoaded = false; setMessage('Could not load image preview.', true); draw(); };
-  next.src = out.image_url + '?t=' + Date.now();
+  next.src = mediaUrl(rel);
+
+  // Prefetch the next visible image so advancing with ] / Save & next feels instant.
+  const vis = visibleItems();
+  const ci = vis.findIndex((x) => x.rel === rel);
+  if (ci >= 0 && ci + 1 < vis.length) { const pf = new Image(); pf.src = mediaUrl(vis[ci + 1].rel); }
+
+  savePrefs();   // remember the active item for next-session restore
   if (compareActive) loadCompareItem(rel);
 }
 
@@ -1054,6 +1165,12 @@ async function saveCaption(markFixed = false) {
   if (markFixed) updateButtons('fixed');
 }
 
+async function saveAndNext(markFixed = false) {
+  if (!activeRel) return;
+  await saveCaption(markFixed);
+  if (!dirty) move(1);   // saveCaption clears dirty on success; only advance then
+}
+
 /* ---------------- keyboard ---------------- */
 document.addEventListener('keydown', (ev) => {
   if (ev.key === ' ' && !ev.target.matches('input, textarea, select, button')) {
@@ -1065,6 +1182,7 @@ document.addEventListener('keydown', (ev) => {
   if (ev.ctrlKey || ev.metaKey) {
     const k = ev.key.toLowerCase();
     if (k === 's') { ev.preventDefault(); saveCaption(false); }
+    else if (k === 'enter') { ev.preventDefault(); saveAndNext(false); }
     else if (k === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); }
     else if (k === 'y') { ev.preventDefault(); redo(); }
     return;
@@ -1079,6 +1197,7 @@ document.addEventListener('keydown', (ev) => {
   if (map[k]) { setStatus(map[k]); }
   else if (k === '[') { move(-1); }
   else if (k === ']') { move(1); }
+  else if (k === 'n' || k === 'N') { moveToNextUnrated(); }
   else if (k === 'v' || k === 'V') { setMode('select'); }
   else if (k === 'b' || k === 'B') { drawSticky = true; setMode('draw'); }
   else if (k === 'f' || k === 'F') { fitView(); draw(); }
@@ -1106,19 +1225,21 @@ document.addEventListener('keyup', (ev) => {
 });
 
 /* ---------------- wiring ---------------- */
-openFolderBtn.addEventListener('click', openFolder);
+openFolderBtn.addEventListener('click', () => openFolder());
 targetFolder.addEventListener('keydown', (e) => { if (e.key === 'Enter') openFolder(); });
-statusFilter.addEventListener('change', () => refreshList(false));
-sortBy.addEventListener('change', () => refreshList(true));
-recursive.addEventListener('change', () => refreshList(true));
-searchBox.addEventListener('input', renderList);
+statusFilter.addEventListener('change', () => { refreshList(false); savePrefs(); });
+sortBy.addEventListener('change', () => { refreshList(true); savePrefs(); });
+recursive.addEventListener('change', () => { refreshList(true); savePrefs(); });
+searchBox.addEventListener('input', () => { renderList(); savePrefs(); });
 ratingButtons.addEventListener('click', (ev) => {
   const btn = ev.target.closest('button[data-status]');
   if (btn) setStatus(btn.dataset.status);
 });
 clearStatusBtn.addEventListener('click', clearStatus);
 saveCaptionBtn.addEventListener('click', () => saveCaption(false));
+saveNextBtn.addEventListener('click', () => saveAndNext(false));
 saveFixedBtn.addEventListener('click', () => saveCaption(true));
+advanceOnRate.addEventListener('change', savePrefs);
 removePairBtn.addEventListener('click', () => removeActivePair('move'));
 deletePairBtn.addEventListener('click', () => removeActivePair('delete'));
 prevItemBtn.addEventListener('click', () => move(-1));
@@ -1557,3 +1678,9 @@ resizeCanvas();
 draw();
 bResize();
 bDraw();
+
+/* resume the previous session: reopen the last folder and re-select the last item */
+if (lastPrefs && lastPrefs.lastFolder) {
+  targetFolder.value = lastPrefs.lastFolder;
+  openFolder({ preferRel: lastPrefs.lastActiveRel || '', silent: true });
+}

@@ -93,6 +93,7 @@ input, select, textarea {
 .bar-btn.icon { padding: 6px 9px; }
 .bar-status { color: var(--good); font-size: 12px; max-width: 28vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-status.error { color: var(--bad); }
+.pos-indicator { flex: none; color: var(--muted); font-size: 12px; white-space: nowrap; min-width: 0; }
 
 /* ---- slim tool strip ---- */
 .toolstrip {
@@ -269,13 +270,25 @@ input, select, textarea {
 }
 .item-list { display: flex; flex-direction: column; gap: 8px; }
 .item {
-  display: block;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
   width: 100%;
   text-align: left;
   background: var(--panel2);
   border: 1px solid var(--border);
   border-left-width: 5px;
 }
+.item-thumb {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.item-body { min-width: 0; flex: 1; }
 .item.active { outline: 2px solid var(--accent); }
 .item-main { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
 .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

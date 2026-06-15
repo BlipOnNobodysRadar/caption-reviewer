@@ -17,6 +17,7 @@
         <button id="prevItem" class="bar-btn icon" title="Previous item ( [ )">&#8592;</button>
         <div id="activeName" class="active-name">No item loaded</div>
         <button id="nextItem" class="bar-btn icon" title="Next item ( ] )">&#8594;</button>
+        <span id="posIndicator" class="pos-indicator" title="Position in the current (filtered) list"></span>
       </div>
       <div class="appbar-right">
         <span id="saveStatus" class="bar-status"></span>
@@ -110,7 +111,8 @@
       <details class="setup" open>
         <summary>Folder</summary>
         <div class="setup-body">
-          <input id="targetFolder" placeholder="/path/to/image_caption_folder" title="Folder containing images and matching .txt captions">
+          <input id="targetFolder" list="recentFolders" placeholder="/path/to/image_caption_folder" title="Folder containing images and matching .txt captions">
+          <datalist id="recentFolders"></datalist>
           <label class="inline"><input type="checkbox" id="recursive"> recursive</label>
           <label class="inline" title="First save of each caption stores the untouched original under .caption_backups/">
             <input type="checkbox" id="backupOriginals" checked> backup originals
@@ -259,9 +261,11 @@
           </select>
         </label>
         <button id="saveCaption" title="Save caption (Ctrl+S)">Save caption</button>
+        <button id="saveNext" title="Save caption and go to the next item (Ctrl+Enter)">Save &amp; next</button>
         <button id="saveFixed" class="primary" title="Save caption and rate this item Fixed (6)">Save + mark fixed</button>
         <button id="removePair" class="danger" title="Move this image and caption to removed/">Remove pair</button>
         <button id="deletePair" class="danger" title="Permanently delete this image and caption">Delete pair</button>
+        <label class="inline" title="After rating with 1-6, jump to the next item automatically"><input type="checkbox" id="advanceOnRate"> advance on rate</label>
       </div>
 
       <!-- B reference caption (shown only in compare mode) -->
@@ -278,7 +282,8 @@
         <summary>Keyboard shortcuts</summary>
         <p>
           <kbd>1</kbd>&#8211;<kbd>6</kbd> rate &middot; <kbd>[</kbd> / <kbd>]</kbd> prev / next &middot;
-          <kbd>Ctrl</kbd>+<kbd>S</kbd> save &middot;
+          <kbd>N</kbd> next unrated &middot;
+          <kbd>Ctrl</kbd>+<kbd>S</kbd> save &middot; <kbd>Ctrl</kbd>+<kbd>Enter</kbd> save &amp; next &middot;
           <kbd>V</kbd> select &middot; <kbd>B</kbd> draw &middot; <kbd>Esc</kbd> cancel / deselect / close panel &middot;
           arrows nudge selected box (<kbd>Shift</kbd> = &times;10) &middot;
           <kbd>Delete</kbd> remove selected element &middot; remove/delete pair from Editor &middot;

@@ -138,8 +138,10 @@ You can use the buttons, or move faster with shortcuts:
 | Shortcut | Action |
 | --- | --- |
 | `1`–`6` | Rate the current item |
-| `[` / `]` | Previous / next item |
+| `[` / `]` | Previous / next item (within the current filter/search) |
+| `N` | Jump to the next unrated item |
 | `Ctrl+S` | Save caption |
+| `Ctrl+Enter` | Save caption and go to the next item |
 | `V` | Select, move, or resize boxes |
 | `B` | Draw a new box |
 | `Esc` | Close a panel, cancel drawing, or deselect |
@@ -168,7 +170,7 @@ Then open this address in your browser:
 http://localhost:5062/
 ```
 
-The **Browse** panel opens automatically. Paste or type the path to your dataset folder and click **Open folder**.
+The **Browse** panel opens automatically. Paste or type the path to your dataset folder and click **Open folder**. Folders you have opened before are offered as suggestions in that field, and on the next launch the app reopens your last folder and re-selects the item you were on.
 
 ### Plain pip
 
@@ -178,6 +180,16 @@ python app.py
 ```
 
 Pillow is optional unless you want same-looking-image matching in compare mode.
+
+## Network and privacy
+
+The server binds to `127.0.0.1` only and runs with Flask's debugger off, so it is reachable only from your own machine. Because it reads and writes files anywhere you point it and has no authentication, do not expose it to a network. If you understand that and want to reach it from another device on a trusted LAN, you can opt in with environment variables:
+
+```bash
+CAPTION_REVIEWER_HOST=0.0.0.0 CAPTION_REVIEWER_PORT=5062 CAPTION_REVIEWER_DEBUG=0 python app.py
+```
+
+Leave `CAPTION_REVIEWER_DEBUG` unset (or `0`) unless you are actively debugging; the debugger allows arbitrary code execution for anyone who can reach the port.
 
 ## First-time workflow
 
