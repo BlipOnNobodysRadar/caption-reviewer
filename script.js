@@ -1387,7 +1387,7 @@ ro.observe(imageWrap);
 function updateLayoutClasses() {
   document.body.classList.toggle('browse-open', browseDrawer.classList.contains('open'));
   document.body.classList.toggle('editor-open', editorDrawer.classList.contains('open'));
-  requestAnimationFrame(() => { refitCanvasesAfterLayoutChange(); savePrefs(); });
+  requestAnimationFrame(() => { resizeCanvas(); fitView(); draw(); bResize(); bDraw(); savePrefs(); });
 }
 function setDrawer(el, open) { el.classList.toggle('open', open); updateLayoutClasses(); }
 function toggleDrawer(el) { setDrawer(el, !el.classList.contains('open')); }
@@ -1398,9 +1398,6 @@ editorToggle.addEventListener('click', () => toggleDrawer(editorDrawer));
 browseClose.addEventListener('click', () => setDrawer(browseDrawer, false));
 editorClose.addEventListener('click', () => setDrawer(editorDrawer, false));
 posIndicator.addEventListener('click', promptJumpToIndex);
-document.querySelector('.app').addEventListener('transitionend', (ev) => {
-  if (ev.propertyName === 'margin-left' || ev.propertyName === 'margin-right') refitCanvasesAfterLayoutChange();
-});
 
 /* ---------------- floating per-box caption tooltip ---------------- *
  * Shared by both canvases: hover a box to read that object's full caption
