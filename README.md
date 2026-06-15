@@ -1,80 +1,83 @@
-# Caption Reviewer + BBox Editor
+# Caption Reviewer + Bounding Box Editor
 
-A local web tool for reviewing **and editing** image captions — including full
-visual editing of bounding boxes for Ideogram-style structured JSON captions
-(`[y_min, x_min, y_max, x_max]`, coordinates 0–1000).
+Caption Reviewer is a local, browser-based tool for checking image captions, fixing them, and drawing or adjusting bounding boxes. It is designed for people preparing image datasets who want a clear, visual review workflow without editing JSON by hand.
 
-## What it does
+It is currently built specifically for **Ideogram4-style structured captions**: each image should have a matching `.txt` caption file whose contents are Ideogram4 JSON-style caption data, including bounding boxes and element descriptions.
 
-The screen is built to **maximize image space**: a slim top bar, a one-line
-canvas toolbar, and the image(s) filling everything below. The item list (with
-folder + compare setup, filters, and search) lives in a collapsible **Browse**
-panel on the left, and the rating + caption editor lives in a collapsible
-**Editor** panel on the right. Toggle either with its button in the top bar (or
-close with `Esc`); use ←/→ in the bar — or `[` / `]` — to move between items
-with both panels shut and the image full-bleed.
+You run it on your own computer, open it in a web browser, and point it at a folder of images plus matching `.txt` caption files. Your images and captions stay on your machine.
 
-**Review** (the original workflow): open a folder of images and matching
-`.txt` captions, rate each (`excellent` … `terrible`, `fixed`), filter and
-sort by status. If an item should leave the review set, use **Remove pair** to
-move its image and caption into `removed/`, or **Delete pair** to permanently
-delete both files. Either action drops the item from review tracking. Review
-state lives in a sidecar `.caption_review_state.json`, never inside caption
-files.
+## Who this is for
 
-**Edit boxes on the image** (new): boxes are drawn over the image and are
-fully interactive — click to select (smallest box wins, so tiny text boxes
-are reachable under full-frame ones), drag to move, pull the 8 handles to
-resize, press `B` and drag to draw a new box. Scroll to zoom, hold Space (or
-middle mouse) to pan, `F` to refit. A live crosshair readout shows the cursor
-in caption coordinates at all times, and arrow keys nudge the selected box by
-1 unit (Shift = 10).
+Use this tool if you need to:
 
-**Edit the caption as structured fields** (new): the Fields tab renders
-`high_level_description`, `style_description`, the scene `background`, and an
-element card for every entry in `compositional_deconstruction.elements` —
-type, description, color palette, and the four bbox numbers (labeled in the
-caption's own y-first order). Cards and canvas boxes select each other. Add,
-duplicate, and delete elements; "Draw box" on a card binds the next drawn
-rectangle to that element. The Raw JSON tab is always available and stays in
-sync. Plain-text captions still work exactly as before.
+- Quickly review a folder of image captions and mark which ones are good or need work.
+- Fix structured captions using forms instead of raw JSON.
+- Draw, move, resize, or check bounding boxes directly on top of each image.
+- Compare one caption or image pass against another folder side by side.
+- Keep original caption files safe while making edits.
 
-**Keep files safe** (new): every edit goes through validation (coordinates
-clamped to range, inverted corners swapped, floats rounded — one click fixes
-all). Truncated JSON from cut-off captioner output is repaired automatically
-on load using the same algorithm as the training pipeline. The first save of
-any caption stores the untouched original under `.caption_backups/`, and
-Ctrl+Z / Ctrl+Shift+Z undo and redo structured edits.
+## What you can do
 
-**Compare against a second folder** (new): in the **Browse** panel, point the
-compare field at a second folder to line the two up **side by side**, each in
-its own large canvas — useful for diffing an old caption pass against a new
-one, or an upscaled image set against the originals. The two folders do **not**
-have to use the same filenames. Each primary image is matched to its
-counterpart with a three-step cascade, stopping at the first hit:
+### Review captions
 
-1. **Same name** — same filename stem (`cat.png` ↔ `cat.txt`/`cat.jpg`).
-2. **Same bytes** — identical file content, so pure renames still line up
-   (`cat.png` ↔ `renamed_4412.png`).
-3. **Same picture** — a perceptual hash (dHash) matches images that *look* the
-   same even after re-encoding, resizing, or a format change
-   (`cat.png` ↔ `IMG_8831.jpg`). A tolerance slider controls how strict this
-   is; anything still unmatched is reported as "only here" / "only in B" so
-   nothing is silently dropped.
+Open a folder of images and matching `.txt` caption files. This tool expects those `.txt` files to contain Ideogram4 JSON-style captions. Then rate each item as:
 
-The second image (B) is shown **read-only** beside the editable one (A); both
-support pan, zoom, and fit, and hovering any box on either side pops that
-object's full caption. Two actions bridge the sides — **Copy B → A** drops the
-second folder's caption into the editor as unsaved changes (review before
-saving), and a **Pick…** match picker lets you override the automatic pairing
-for any image, in case the look-alike step guesses wrong on near-duplicate
-frames. B's full caption text sits in the Editor panel, and match overrides are
-remembered per compare-folder in the browser.
+- Excellent
+- Good enough
+- Needs work
+- Bad
+- Terrible
+- Fixed
 
-The "same picture" step needs **Pillow** (`pip install pillow`); without it the
-first two steps still work and the tool says so rather than failing.
+You can filter, sort, and search the list while reviewing. If an image/caption pair should not be part of the dataset, use **Remove pair** to move both files into a `removed/` folder, or **Delete pair** to permanently delete both files.
 
-## Expected folder layout
+Review ratings are saved in `.caption_review_state.json`. They are not written into your caption files.
+
+### Edit boxes visually
+
+Bounding boxes appear directly over the image. You can:
+
+- Click a box to select it.
+- Drag a selected box to move it.
+- Drag a box handle to resize it.
+- Press **B** or click **Draw** to draw a new box.
+- Use the arrow keys to nudge the selected box by 1 unit, or hold **Shift** for bigger 10-unit nudges.
+- Scroll to zoom, hold **Space** and drag to pan, or press **F** to fit the image back into view.
+
+The coordinate readout shows where your cursor is in caption coordinates.
+
+### Edit caption fields without hand-writing JSON
+
+For structured captions, the **Fields** tab shows friendly form fields for:
+
+- High-level description
+- Style details such as aesthetics, lighting, art style, and medium
+- Background
+- Each individual element, including type, description, color palette, and bounding box coordinates
+
+Element cards and boxes are linked: selecting one selects the other. The **Raw JSON** tab is still available for advanced edits, and unknown caption fields are preserved when you save.
+
+Plain-text captions still open and can be converted into a structured caption when needed.
+
+### Compare two folders
+
+Use **Compare against a second folder** when you want to review two versions side by side, such as:
+
+- Old captions vs. new captions
+- Original images vs. upscaled images
+- One model run vs. another model run
+
+The tool tries to match each primary image with the best image in the compare folder by:
+
+1. Same filename stem, such as `cat.png` matching `cat.txt` or `cat.jpg`.
+2. Same file contents, even if the file was renamed.
+3. Same-looking image using a perceptual image hash, useful after resizing or re-encoding.
+
+The second image is read-only. You can copy the compare caption into the editable caption as an unsaved change, then review and save it if it looks right.
+
+The same-looking image match requires Pillow. If Pillow is not installed, filename and exact-file matching still work.
+
+## Your folder should look like this
 
 ```text
 my_dataset/
@@ -82,56 +85,108 @@ my_dataset/
   image001.txt
   image002.png
   image002.txt
-  .caption_review_state.json   # created by this tool
-  .caption_backups/            # originals, created on first save
-  removed/                     # removed image/caption pairs are moved here
+  .caption_review_state.json   # created automatically for ratings
+  .caption_backups/            # created automatically before first caption save
+  removed/                     # created if you remove image/caption pairs
 ```
 
-Captions are matched by stem: `image001.jpg` uses `image001.txt`.
+Each image is matched with a caption file that has the same name before the extension. For example, `image001.jpg` uses `image001.txt`.
 
 ## Caption format
 
-The editor is built around Ideogram-style structured captions:
+The tool is currently built around Ideogram4 JSON-style captions stored inside `.txt` files, like this:
 
 ```json
 {
   "high_level_description": "...",
-  "style_description": { "aesthetics": "...", "lighting": "...", "...": "..." },
+  "style_description": {
+    "aesthetics": "...",
+    "lighting": "..."
+  },
   "compositional_deconstruction": {
     "background": "...",
     "elements": [
-      { "type": "obj", "bbox": [y1, x1, y2, x2], "desc": "...", "color_palette": ["#D4AF37"] }
+      {
+        "type": "object",
+        "desc": "...",
+        "bbox": [y1, x1, y2, x2],
+        "color_palette": ["#D4AF37"]
+      }
     ]
   }
 }
 ```
 
-`bbox` values are integers from 0 to the coordinate max (default 1000),
-relative to the original image, stored `[y_min, x_min, y_max, x_max]`. The
-toolbar lets you switch the *interpretation* to `xyxy` and change the
-coordinate max if your captions differ; whatever is selected is used
-consistently for both display and editing. Saving from the Fields tab writes
-pretty-printed JSON by default (a minified option is next to Save); unknown
-keys in your captions are preserved untouched.
+Bounding boxes are usually stored as `[y_min, x_min, y_max, x_max]` with numbers from `0` to `1000`. If your captions use a different order, change the **format** control in the toolbar before editing. If your coordinate range is not `1000`, change the **max** value.
+
+When you save, the tool can write readable pretty JSON or compact minified JSON.
+
+## Safety features
+
+Caption Reviewer is built to avoid accidental data loss:
+
+- The first time you save a caption, the original is copied into `.caption_backups/`.
+- Box coordinates are checked, clamped to the valid range, and fixed when possible.
+- Inverted box corners are corrected automatically when you choose to fix issues.
+- Truncated structured JSON can often be repaired on load.
+- **Ctrl+Z** and **Ctrl+Shift+Z** undo and redo structured edits before saving.
 
 ## Keyboard shortcuts
 
-`1`–`6` rate · `[` / `]` previous / next · `Ctrl+S` save ·
-`V` select mode · `B` draw mode · `Esc` close panel / cancel / deselect ·
-arrows nudge box (Shift = ×10) · `Delete` remove selected element ·
-scroll zoom · Space-drag / middle-drag pan · `F` fit ·
-`Ctrl+Z` / `Ctrl+Shift+Z` undo / redo.
+You can use the buttons, or move faster with shortcuts:
 
-## Install with uv
+| Shortcut | Action |
+| --- | --- |
+| `1`–`6` | Rate the current item |
+| `[` / `]` | Previous / next item |
+| `Ctrl+S` | Save caption |
+| `V` | Select, move, or resize boxes |
+| `B` | Draw a new box |
+| `Esc` | Close a panel, cancel drawing, or deselect |
+| Arrow keys | Nudge the selected box |
+| `Shift` + arrow keys | Nudge the selected box farther |
+| `Delete` | Remove the selected element |
+| Mouse wheel | Zoom |
+| `Space` + drag, or middle mouse drag | Pan around the image |
+| `F` | Fit image to the available space |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
+
+Most toolbar and action buttons also show their shortcut in a tooltip if you hover over them.
+
+## Install and run
+
+### Recommended: uv
 
 ```bash
 uv sync
 uv run python app.py
 ```
 
-Open `http://localhost:5062/`. The **Browse** panel is open by default — put
-your dataset folder path in it and hit **Open folder**.
+Then open this address in your browser:
 
-(Plain pip works too: `pip install flask pillow`, then `python app.py`.
-Pillow is only needed for the "same picture" step of compare mode; everything
-else runs without it.)
+```text
+http://localhost:5062/
+```
+
+The **Browse** panel opens automatically. Paste or type the path to your dataset folder and click **Open folder**.
+
+### Plain pip
+
+```bash
+pip install flask pillow
+python app.py
+```
+
+Pillow is optional unless you want same-looking-image matching in compare mode.
+
+## First-time workflow
+
+1. Start the app.
+2. Open `http://localhost:5062/` in your browser.
+3. In **Browse**, choose your image/caption folder.
+4. Click an item in the list.
+5. Review the image, caption, and boxes.
+6. Rate it with the buttons or number keys.
+7. Fix fields or boxes if needed.
+8. Click **Save caption** or **Save + mark fixed**.
+9. Use the next arrow or `]` to move on.
