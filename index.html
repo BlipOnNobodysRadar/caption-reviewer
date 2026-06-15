@@ -11,7 +11,7 @@
     <!-- ================= slim app bar ================= -->
     <header class="appbar">
       <div class="appbar-left">
-        <button id="browseToggle" class="bar-btn" title="Show / hide the items + folders panel">&#9776; Browse</button>
+        <button id="browseToggle" class="bar-btn" title="Show or hide Browse panel (Esc closes open panels)">&#9776; Browse</button>
       </div>
       <div class="appbar-center">
         <button id="prevItem" class="bar-btn icon" title="Previous item ( [ )">&#8592;</button>
@@ -20,7 +20,7 @@
       </div>
       <div class="appbar-right">
         <span id="saveStatus" class="bar-status"></span>
-        <button id="editorToggle" class="bar-btn" title="Show / hide the caption + rating editor">Editor &#9776;</button>
+        <button id="editorToggle" class="bar-btn" title="Show or hide Editor panel (Esc closes open panels)">Editor &#9776;</button>
       </div>
     </header>
 
@@ -29,19 +29,19 @@
       <div class="tool-group">
         <button id="modeSelectBtn" class="active" title="Select / move / resize boxes (V)">Select</button>
         <button id="modeDrawBtn" title="Draw new boxes; stays active until Esc (B)">Draw</button>
-        <button id="addElementBtn" title="Add a new element, then draw its box">+ Element</button>
+        <button id="addElementBtn" title="Add a new element, then draw its box (B also starts drawing)">+ Element</button>
       </div>
       <div class="tool-group">
-        <button id="zoomOutBtn" title="Zoom out">&#8722;</button>
+        <button id="zoomOutBtn" title="Zoom out (mouse wheel also zooms)">&#8722;</button>
         <span id="zoomLabel" class="zoom-label">100%</span>
-        <button id="zoomInBtn" title="Zoom in">+</button>
+        <button id="zoomInBtn" title="Zoom in (mouse wheel also zooms)">+</button>
         <button id="fitBtn" title="Fit image to view (F)">Fit</button>
       </div>
       <div class="tool-group toggles">
-        <label><input type="checkbox" id="showBboxes" checked> boxes</label>
-        <label><input type="checkbox" id="bboxLabels" checked> labels</label>
-        <label><input type="checkbox" id="bboxFill"> fill</label>
-        <label><input type="checkbox" id="focusMode"> dim others</label>
+        <label><input type="checkbox" id="showBboxes" checked title="Show or hide bounding boxes"> boxes</label>
+        <label><input type="checkbox" id="bboxLabels" checked title="Show or hide box labels"> labels</label>
+        <label><input type="checkbox" id="bboxFill" title="Tint box interiors for easier scanning"> fill</label>
+        <label><input type="checkbox" id="focusMode" title="Dim unselected boxes so the current element stands out"> dim others</label>
       </div>
       <div class="tool-group">
         <label>format
@@ -104,18 +104,18 @@
   <aside id="browseDrawer" class="drawer left open">
     <div class="drawer-head">
       <strong>Browse</strong>
-      <button id="browseClose" class="bar-btn icon" title="Close panel">&times;</button>
+      <button id="browseClose" class="bar-btn icon" title="Close Browse panel (Esc)">&times;</button>
     </div>
     <div class="drawer-body">
       <details class="setup" open>
         <summary>Folder</summary>
         <div class="setup-body">
-          <input id="targetFolder" placeholder="/path/to/image_caption_folder">
+          <input id="targetFolder" placeholder="/path/to/image_caption_folder" title="Folder containing images and matching .txt captions">
           <label class="inline"><input type="checkbox" id="recursive"> recursive</label>
           <label class="inline" title="First save of each caption stores the untouched original under .caption_backups/">
             <input type="checkbox" id="backupOriginals" checked> backup originals
           </label>
-          <button id="openFolder" class="primary">Open folder</button>
+          <button id="openFolder" class="primary" title="Load this folder for review">Open folder</button>
           <div id="counts" class="counts">No folder loaded.</div>
         </div>
       </details>
@@ -123,14 +123,14 @@
       <details class="setup">
         <summary>Compare against a second folder</summary>
         <div class="setup-body">
-          <input id="compareFolder" placeholder="/path/to/second_folder">
+          <input id="compareFolder" placeholder="/path/to/second_folder" title="Optional second folder to compare side by side">
           <label class="inline"><input type="checkbox" id="compareRecursive"> recursive</label>
           <label class="inline" title="Looseness for matching renamed/resized images by content. 0 = pixel-identical only; higher tolerates more re-encoding. Only used when filenames and exact bytes don't already match.">
             match dist <input id="compareMaxDist" type="number" value="12" min="0" max="64">
           </label>
           <div class="setup-row">
-            <button id="loadCompare">Load compare folder</button>
-            <button id="clearCompare" class="hidden">Clear</button>
+            <button id="loadCompare" title="Load the second folder for side-by-side comparison">Load compare folder</button>
+            <button id="clearCompare" class="hidden" title="Turn off compare mode">Clear</button>
           </div>
           <label class="inline">show
             <select id="compareFilter">
@@ -180,22 +180,22 @@
   <aside id="editorDrawer" class="drawer right">
     <div class="drawer-head">
       <strong>Editor</strong>
-      <button id="editorClose" class="bar-btn icon" title="Close panel">&times;</button>
+      <button id="editorClose" class="bar-btn icon" title="Close Editor panel (Esc)">&times;</button>
     </div>
     <div class="drawer-body">
       <div class="rating-row" id="ratingButtons">
-        <button data-status="excellent">1 Excellent</button>
-        <button data-status="good_enough">2 Good enough</button>
-        <button data-status="needs_work">3 Needs work</button>
-        <button data-status="bad">4 Bad</button>
-        <button data-status="terrible">5 Terrible</button>
-        <button data-status="fixed">6 Fixed</button>
-        <button id="clearStatus">Clear</button>
+        <button data-status="excellent" title="Rate current item Excellent (1)">1 Excellent</button>
+        <button data-status="good_enough" title="Rate current item Good enough (2)">2 Good enough</button>
+        <button data-status="needs_work" title="Rate current item Needs work (3)">3 Needs work</button>
+        <button data-status="bad" title="Rate current item Bad (4)">4 Bad</button>
+        <button data-status="terrible" title="Rate current item Terrible (5)">5 Terrible</button>
+        <button data-status="fixed" title="Rate current item Fixed (6)">6 Fixed</button>
+        <button id="clearStatus" title="Clear the current rating">Clear</button>
       </div>
 
       <div class="tabs">
-        <button id="tabFieldsBtn" class="tab active">Fields</button>
-        <button id="tabRawBtn" class="tab">Raw JSON</button>
+        <button id="tabFieldsBtn" class="tab active" title="Edit caption in friendly fields">Fields</button>
+        <button id="tabRawBtn" class="tab" title="Edit the caption JSON directly">Raw JSON</button>
       </div>
 
       <div id="fieldsPanel" class="fields-panel">
@@ -246,7 +246,7 @@
         </div>
         <textarea id="captionText" spellcheck="false"></textarea>
         <div class="raw-actions">
-          <button id="rawApplyBtn">Apply JSON to fields</button>
+          <button id="rawApplyBtn" title="Parse the raw JSON and update the Fields tab">Apply JSON to fields</button>
           <span id="rawStatus" class="raw-status"></span>
         </div>
       </div>
@@ -258,8 +258,8 @@
             <option value="minified">minified</option>
           </select>
         </label>
-        <button id="saveCaption">Save caption</button>
-        <button id="saveFixed" class="primary">Save + mark fixed</button>
+        <button id="saveCaption" title="Save caption (Ctrl+S)">Save caption</button>
+        <button id="saveFixed" class="primary" title="Save caption and rate this item Fixed (6)">Save + mark fixed</button>
         <button id="removePair" class="danger" title="Move this image and caption to removed/">Remove pair</button>
         <button id="deletePair" class="danger" title="Permanently delete this image and caption">Delete pair</button>
       </div>
