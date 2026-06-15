@@ -30,6 +30,7 @@ const elementsCount = $('elementsCount'), elementsList = $('elementsList');
 const captionText = $('captionText'), captionPath = $('captionPath');
 const rawApplyBtn = $('rawApplyBtn'), rawStatus = $('rawStatus');
 const saveFormat = $('saveFormat'), saveCaptionBtn = $('saveCaption'), saveFixedBtn = $('saveFixed');
+const removePairBtn = $('removePair'), deletePairBtn = $('deletePair');
 const saveStatus = $('saveStatus');
 /* layout: app-bar toggles, slide-in drawers, floating hover tooltip */
 const browseToggle = $('browseToggle'), editorToggle = $('editorToggle');
@@ -998,6 +999,43 @@ function buildSaveText() {
   }
   return captionText.value;
 }
+
+async function removeActivePair(mode) {
+  if (!activeRel) return;
+  const verb = mode === 'delete' ? 'permanently delete' : 'move to removed/';
+  const detail = mode === 'delete'
+    ? 'This deletes the image and matching .txt caption from disk.'
+    : 'This moves the image and matching .txt caption to the removed/ subfolder and drops review tracking.';
+  if (dirty && !confirm('Caption has unsaved changes. Discard them and ' + verb + ' this pair?')) return;
+  if (!confirm(detail + '\n\nContinue for ' + activeRel + '?')) return;
+
+  const currentRel = activeRel;
+  const currentIndex = activeIndex;
+  const res = await fetch('/api/remove-pair', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rel: currentRel, mode })
+  });
+  const out = await res.json();
+  if (out.error) { setMessage(out.error, true); return; }
+
+  dirty = false; rawDirtyPending = false; activeRel = null; activeIndex = -1;
+  setCaptionState('');
+  imgLoaded = false;
+  bImgLoaded = false; bText = ''; bDoc = null;
+  draw(); bDraw();
+  setMessage(mode === 'delete' ? 'Pair deleted and untracked.' : 'Pair moved to removed/ and untracked.');
+  await refreshList(false);
+  const next = items[Math.min(currentIndex, items.length - 1)];
+  if (next) {
+    await loadItem(next.rel);
+  } else {
+    activeName.textContent = 'No item loaded';
+    captionPath.textContent = '';
+    emptyState.classList.remove('hidden');
+    reviewView.classList.add('hidden');
+  }
+}
+
 async function saveCaption(markFixed = false) {
   if (!activeRel) return;
   const text = buildSaveText();
@@ -1081,6 +1119,8 @@ ratingButtons.addEventListener('click', (ev) => {
 clearStatusBtn.addEventListener('click', clearStatus);
 saveCaptionBtn.addEventListener('click', () => saveCaption(false));
 saveFixedBtn.addEventListener('click', () => saveCaption(true));
+removePairBtn.addEventListener('click', () => removeActivePair('move'));
+deletePairBtn.addEventListener('click', () => removeActivePair('delete'));
 prevItemBtn.addEventListener('click', () => move(-1));
 nextItemBtn.addEventListener('click', () => move(1));
 modeSelectBtn.addEventListener('click', () => setMode('select'));

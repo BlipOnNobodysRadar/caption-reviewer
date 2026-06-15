@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,7 @@ def write_caption(image_path: Path, caption: str) -> Path:
 
 
 BACKUP_DIRNAME = ".caption_backups"
+REMOVED_DIRNAME = "removed"
 
 
 def backup_original_caption(root: Path, caption_path: Path) -> Path | None:
@@ -305,7 +307,12 @@ def scan_images(root: Path, recursive: bool) -> list[Path]:
     iterator = root.rglob("*") if recursive else root.iterdir()
     out = [
         p for p in iterator
-        if p.is_file() and allowed_image(p) and BACKUP_DIRNAME not in p.parts
+        if (
+            p.is_file()
+            and allowed_image(p)
+            and BACKUP_DIRNAME not in p.parts
+            and REMOVED_DIRNAME not in p.relative_to(root).parts
+        )
     ]
     out.sort(key=lambda p: str(p.relative_to(root)).lower())
     return out
@@ -510,6 +517,45 @@ def save_caption():
     )
 
 
+def remove_pair(root: Path, image_path: Path, mode: str) -> dict[str, Any]:
+    """Delete or move an image and its matching caption out of the review set."""
+    rel = image_path.relative_to(root).as_posix()
+    caption_path = image_to_caption_path(image_path)
+    paths = [image_path]
+    if caption_path.exists():
+        paths.append(caption_path)
+
+    if mode == "delete":
+        removed_paths: list[str] = []
+        for path in paths:
+            path.unlink()
+            removed_paths.append(str(path))
+        destination = None
+    elif mode == "move":
+        removed_paths = []
+        destination = root / REMOVED_DIRNAME / image_path.relative_to(root)
+        for path in paths:
+            dest = root / REMOVED_DIRNAME / path.relative_to(root)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                suffix = int(now_ts())
+                dest = dest.with_name(f"{dest.stem}_{suffix}{dest.suffix}")
+            shutil.move(str(path), str(dest))
+            removed_paths.append(str(dest))
+    else:
+        raise RuntimeError("Invalid removal mode.")
+
+    state = load_state(root)
+    state.setdefault("items", {}).pop(rel, None)
+    save_state(root, state)
+    return {
+        "rel": rel,
+        "mode": mode,
+        "paths": removed_paths,
+        "destination": str(destination) if destination else None,
+    }
+
+
 @app.route("/api/clear-status", methods=["POST"])
 def clear_status():
     root = require_root()
@@ -526,6 +572,26 @@ def clear_status():
         items[rel]["updated_at"] = now_ts()
     save_state(root, state)
     return jsonify({"ok": True, "rel": rel, "status": "unrated"})
+
+
+@app.route("/api/remove-pair", methods=["POST"])
+def remove_caption_image_pair():
+    root = require_root()
+    data = request.get_json(force=True)
+    rel = data.get("rel", "")
+    mode = (data.get("mode") or "move").strip().lower()
+    if mode not in {"move", "delete"}:
+        return jsonify({"error": "Removal mode must be 'move' or 'delete'."}), 400
+    image_path = safe_resolve_under_root(rel)
+    if not image_path.exists() or not image_path.is_file() or not allowed_image(image_path):
+        return jsonify({"error": "Image not found."}), 404
+    if REMOVED_DIRNAME in image_path.relative_to(root).parts:
+        return jsonify({"error": "Item is already in the removed folder."}), 400
+    try:
+        result = remove_pair(root, image_path, mode)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"ok": True, **result, "counts": build_counts(root, LAST_RECURSIVE)})
 
 
 @app.route("/media/<path:rel>")

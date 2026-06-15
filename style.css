@@ -34,6 +34,7 @@ button {
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: white; }
 button.primary:hover { filter: brightness(1.08); }
+button.danger:hover { border-color: var(--bad); color: var(--bad); }
 button:disabled { opacity: .55; cursor: default; }
 button:disabled:hover { border-color: var(--border); }
 input, select, textarea {
