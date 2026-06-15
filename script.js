@@ -1366,7 +1366,21 @@ saveFormat.addEventListener('change', savePrefs);
 backupOriginals.addEventListener('change', savePrefs);
 window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
-const ro = new ResizeObserver(() => { resizeCanvas(); draw(); });
+function refitPrimaryCanvas() {
+  resizeCanvas();
+  fitView();
+  draw();
+}
+function refitCanvasesAfterLayoutChange() {
+  const delays = [0, 80, 220];
+  for (const delay of delays) {
+    setTimeout(() => {
+      refitPrimaryCanvas();
+      if (compareActive) { bResize(); bFit(); bDraw(); }
+    }, delay);
+  }
+}
+const ro = new ResizeObserver(() => { refitPrimaryCanvas(); });
 ro.observe(imageWrap);
 
 /* ---------------- drawers (collapsible side panels) ---------------- */
