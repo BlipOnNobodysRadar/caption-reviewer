@@ -16,8 +16,11 @@ with both panels shut and the image full-bleed.
 
 **Review** (the original workflow): open a folder of images and matching
 `.txt` captions, rate each (`excellent` … `terrible`, `fixed`), filter and
-sort by status. Review state lives in a sidecar `.caption_review_state.json`,
-never inside caption files.
+sort by status. If an item should leave the review set, use **Remove pair** to
+move its image and caption into `removed/`, or **Delete pair** to permanently
+delete both files. Either action drops the item from review tracking. Review
+state lives in a sidecar `.caption_review_state.json`, never inside caption
+files.
 
 **Edit boxes on the image** (new): boxes are drawn over the image and are
 fully interactive — click to select (smallest box wins, so tiny text boxes
@@ -81,6 +84,7 @@ my_dataset/
   image002.txt
   .caption_review_state.json   # created by this tool
   .caption_backups/            # originals, created on first save
+  removed/                     # removed image/caption pairs are moved here
 ```
 
 Captions are matched by stem: `image001.jpg` uses `image001.txt`.
