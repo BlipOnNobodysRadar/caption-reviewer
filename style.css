@@ -357,3 +357,80 @@ kbd {
   .controls { grid-template-columns: 1fr 1fr; }
   .topbar { grid-template-columns: 1fr; }
 }
+
+/* ---------------- compare mode ---------------- */
+.compare-bar {
+  margin-top: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cmp-row { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 8px; align-items: center; }
+.cmp-row2 { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.cmp-row2 .muted { overflow-wrap: anywhere; }
+#compareMaxDist { width: 58px; padding: 6px; }
+
+/* match badge shown on each list item when compare is loaded */
+.cmp-badge {
+  flex: none;
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: 4px;
+  margin-left: 6px;
+  border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.cmp-badge.ok { color: var(--good); border-color: #2f6b46; }
+.cmp-badge.no { color: var(--bad); border-color: #7a3a3a; }
+
+/* B shows as a full-width band beneath the A image + editor */
+.review-view.compare-on {
+  grid-template-rows: minmax(0, 1fr) minmax(280px, 0.85fr);
+  overflow: auto;
+}
+.compare-pane {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 480px;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  min-height: 0;
+}
+.compare-media, .compare-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+.cmp-head { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.cmp-head strong { color: var(--text); }
+.cmp-head .spacer { flex: 1; }
+.b-caption-text {
+  flex: 1;
+  min-height: 120px;
+  width: 100%;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.45;
+  tab-size: 2;
+  background: var(--panel2);
+}
+.cmp-empty { padding: 10px; }
+.b-pick { display: flex; flex-direction: column; gap: 6px; }
+.b-pick-list { max-height: 150px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.b-pick-list button { text-align: left; padding: 4px 8px; font-size: 12px; background: var(--panel2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-pick-list button.sel { border-color: var(--accent); color: #fff; }
+
+@media (max-width: 1380px) {
+  .compare-pane { grid-template-columns: minmax(0, 1fr) 420px; }
+}
+@media (max-width: 1180px) {
+  .compare-pane { grid-template-columns: 1fr; }
+}

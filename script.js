@@ -140,10 +140,14 @@ function renderCounts(counts) {
 function renderList() {
   listEl.innerHTML = '';
   const q = searchBox.value.trim().toLowerCase();
+  let base = items;
+  if (compareActive && compareFilter.value !== 'all') {
+    base = items.filter((it) => compareFilter.value === 'matched' ? !!matchMap[it.rel] : !matchMap[it.rel]);
+  }
   const visible = q
-    ? items.filter((it) => it.rel.toLowerCase().includes(q) || (it.caption_preview || '').toLowerCase().includes(q))
-    : items;
-  listCountEl.textContent = q ? `${visible.length}/${items.length}` : String(items.length);
+    ? base.filter((it) => it.rel.toLowerCase().includes(q) || (it.caption_preview || '').toLowerCase().includes(q))
+    : base;
+  listCountEl.textContent = (q || base !== items) ? `${visible.length}/${items.length}` : String(items.length);
   if (!visible.length) {
     const div = document.createElement('div');
     div.className = 'empty-list';
@@ -163,6 +167,17 @@ function renderList() {
       <div class="sub" title="${escapeText(item.rel)}">${escapeText(item.folder)}</div>
       <div class="preview">${escapeText(item.caption_preview || '(no caption file)')}</div>`;
     div.addEventListener('click', () => loadItem(item.rel));
+    if (compareActive) {
+      const m = matchMap[item.rel];
+      const badge = document.createElement('span');
+      badge.className = 'cmp-badge ' + (m ? 'ok' : 'no');
+      badge.textContent = m
+        ? (m.method === 'name' ? 'B' : m.method === 'bytes' ? 'B~' : 'B\u2248')
+        : 'no B';
+      badge.title = m ? ('B match: ' + m.b_rel + ' (' + m.method + ')') : 'no match in compare folder';
+      const statusBadge = div.querySelector('.badge');
+      if (statusBadge) statusBadge.after(badge);
+    }
     listEl.appendChild(div);
   }
 }
@@ -179,6 +194,7 @@ async function openFolder() {
     const out = await res.json();
     if (out.error) throw new Error(out.error);
     items = out.items || [];
+    resetCompareForNewFolder();
     activeRel = null; activeIndex = -1;
     renderCounts(out.counts);
     renderList();
@@ -268,6 +284,7 @@ async function loadItem(rel) {
   next.onload = () => { img = next; imgLoaded = true; resizeCanvas(); fitView(); draw(); };
   next.onerror = () => { imgLoaded = false; setMessage('Could not load image preview.', true); draw(); };
   next.src = out.image_url + '?t=' + Date.now();
+  if (compareActive) loadCompareItem(rel);
 }
 
 function setCaptionState(text) {
@@ -1075,10 +1092,10 @@ function zoomCenter(f) {
 tabFieldsBtn.addEventListener('click', () => switchTab('fields'));
 tabRawBtn.addEventListener('click', () => switchTab('raw'));
 for (const el of [showBboxes, bboxLabels, bboxFill, focusMode]) {
-  el.addEventListener('change', () => { draw(); savePrefs(); });
+  el.addEventListener('change', () => { draw(); bDraw(); savePrefs(); });
 }
-bboxFormat.addEventListener('change', () => { relabelCoordInputs(); refreshIssues(); draw(); savePrefs(); });
-bboxCoordMax.addEventListener('change', () => { refreshIssues(); draw(); savePrefs(); });
+bboxFormat.addEventListener('change', () => { relabelCoordInputs(); refreshIssues(); draw(); bDraw(); savePrefs(); });
+bboxCoordMax.addEventListener('change', () => { refreshIssues(); draw(); bDraw(); savePrefs(); });
 saveFormat.addEventListener('change', savePrefs);
 backupOriginals.addEventListener('change', savePrefs);
 window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
@@ -1086,8 +1103,328 @@ window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault()
 const ro = new ResizeObserver(() => { resizeCanvas(); draw(); });
 ro.observe(imageWrap);
 
+/* ===================== compare mode (second folder) ===================== *
+ * The A side above stays the full editor. This adds a read-only B side that
+ * shows the matched image (with its boxes drawn) and caption from a second
+ * folder, plus a manual-match override and a "copy B into the A editor" action.
+ * Matching is done on the backend (name -> bytes -> perceptual hash).        */
+const compareFolder = $('compareFolder'), compareRecursive = $('compareRecursive');
+const compareMaxDist = $('compareMaxDist'), loadCompareBtn = $('loadCompare'), clearCompareBtn = $('clearCompare');
+const compareFilter = $('compareFilter'), compareSummary = $('compareSummary');
+const comparePane = $('comparePane'), cmpMatchInfo = $('cmpMatchInfo');
+const bImageWrap = $('bImageWrap'), bCanvas = $('bCanvas');
+const bctx = bCanvas.getContext('2d');
+const bFitBtn = $('bFitBtn'), bCaptionPath = $('bCaptionPath');
+const bCaptionText = $('bCaptionText'), bCaptionEmpty = $('bCaptionEmpty');
+const copyBtoABtn = $('copyBtoA'), bPickToggle = $('bPickToggle'), bPickWrap = $('bPickWrap');
+const bPickSearch = $('bPickSearch'), bPickList = $('bPickList'), bPickClear = $('bPickClear');
+
+let compareActive = false;
+let compareRoot = '';
+let matchMap = {};            // a_rel -> { b_rel, method, distance }
+let bImages = [];             // [{ rel, filename }] for the manual picker
+let compareOverrides = {};    // { [compareRoot]: { [a_rel]: b_rel } }
+let bText = '', bDoc = null;
+let bImg = new Image(), bImgLoaded = false;
+let bView = { scale: 1, ox: 0, oy: 0 };
+let bDrag = null;
+
+/* manual overrides persist locally, keyed by compare-folder path */
+function loadOverrides() {
+  try { compareOverrides = JSON.parse(localStorage.getItem('caption_reviewer_compare_overrides') || '{}'); }
+  catch (e) { compareOverrides = {}; }
+}
+function saveOverrides() {
+  localStorage.setItem('caption_reviewer_compare_overrides', JSON.stringify(compareOverrides));
+}
+function overrideFor(aRel) {
+  const m = compareOverrides[compareRoot];
+  return (m && m[aRel]) || '';
+}
+function setOverride(aRel, bRel) {
+  if (!compareOverrides[compareRoot]) compareOverrides[compareRoot] = {};
+  if (bRel) compareOverrides[compareRoot][aRel] = bRel;
+  else delete compareOverrides[compareRoot][aRel];
+  saveOverrides();
+}
+
+function resetCompareForNewFolder() {
+  compareActive = false;
+  matchMap = {}; bImages = []; compareRoot = '';
+  comparePane.classList.add('hidden');
+  reviewView.classList.remove('compare-on');
+  clearCompareBtn.classList.add('hidden');
+  bPickWrap.classList.add('hidden');
+  compareSummary.textContent = 'No compare folder loaded.';
+  bText = ''; bDoc = null; bImgLoaded = false;
+}
+
+async function loadCompareFolder() {
+  const folder = compareFolder.value.trim();
+  if (!folder) return;
+  loadCompareBtn.disabled = true;
+  loadCompareBtn.textContent = 'Matching\u2026';
+  try {
+    const res = await fetch('/api/open-compare-folder', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        compare_folder: folder,
+        recursive: compareRecursive.checked,
+        a_recursive: recursive.checked,
+        max_distance: Number(compareMaxDist.value) || 12
+      })
+    });
+    const out = await res.json();
+    if (out.error) throw new Error(out.error);
+    compareActive = true;
+    compareRoot = out.compare_root;
+    matchMap = out.matches || {};
+    bImages = out.b_images || [];
+    clearCompareBtn.classList.remove('hidden');
+    renderCompareSummary(out.summary, out.have_pil, out.max_distance);
+    renderList();
+    if (activeRel) await loadCompareItem(activeRel);
+  } catch (e) {
+    alert('Compare error: ' + e.message);
+  } finally {
+    loadCompareBtn.disabled = false;
+    loadCompareBtn.textContent = 'Load compare folder';
+  }
+}
+
+function renderCompareSummary(s, havePil, maxDist) {
+  if (!s) { compareSummary.textContent = ''; return; }
+  const bm = s.by_method || {};
+  const how = [];
+  if (bm.name) how.push(`${bm.name} by name`);
+  if (bm.bytes) how.push(`${bm.bytes} by bytes`);
+  if (bm.phash) how.push(`${bm.phash} by image`);
+  let txt = `${s.matched} matched` + (how.length ? ` (${how.join(', ')})` : '') +
+            ` \u00b7 ${s.a_only} only here \u00b7 ${s.b_only} only in B`;
+  txt += havePil
+    ? ` \u00b7 image matching on (dist \u2264 ${maxDist})`
+    : ' \u00b7 image matching off \u2014 install Pillow to match renamed/resized files';
+  compareSummary.textContent = txt;
+}
+
+async function clearCompare() {
+  resetCompareForNewFolder();
+  bDraw();
+  try { await fetch('/api/compare-clear', { method: 'POST' }); } catch (e) { /* ignore */ }
+  renderList();
+}
+
+function showComparePane() {
+  comparePane.classList.remove('hidden');
+  reviewView.classList.add('compare-on');
+  bResize();
+}
+
+async function loadCompareItem(aRel) {
+  if (!compareActive) return;
+  showComparePane();
+  const ov = overrideFor(aRel);
+  const url = '/api/compare-item?rel=' + encodeURIComponent(aRel) +
+              (ov ? '&b_rel=' + encodeURIComponent(ov) : '');
+  let out;
+  try { out = await (await fetch(url)).json(); }
+  catch (e) { out = { matched: false }; }
+
+  bPickWrap.classList.add('hidden');
+  bPickClear.classList.toggle('hidden', !ov);
+
+  if (!out || !out.matched) {
+    cmpMatchInfo.textContent = ov ? 'manual match not found in B' : 'no match in B';
+    bCaptionPath.textContent = '';
+    bCaptionEmpty.textContent = ov
+      ? 'The manually chosen file is missing. Pick another, or clear the manual match.'
+      : 'No matching image in the compare folder. Use \u201cPick match\u2026\u201d to choose one.';
+    bCaptionEmpty.classList.remove('hidden');
+    bCaptionText.classList.add('hidden');
+    bText = ''; bDoc = null;
+    copyBtoABtn.disabled = true;
+    bImgLoaded = false; bDraw();
+    return;
+  }
+
+  const tag = out.overridden ? 'manual match'
+    : out.method === 'name' ? 'matched by name'
+    : out.method === 'bytes' ? 'matched by bytes (renamed)'
+    : `matched by image (distance ${out.distance})`;
+  cmpMatchInfo.textContent = `${out.b_filename} \u00b7 ${tag}`;
+  bCaptionPath.textContent = out.b_caption_path || '';
+
+  bText = out.b_caption || '';
+  const r = C.parseCaptionDoc(bText);
+  bDoc = r.doc;
+  bCaptionEmpty.classList.add('hidden');
+  bCaptionText.classList.remove('hidden');
+  bCaptionText.value = out.b_caption_exists
+    ? (bDoc ? C.serializeDoc(bDoc, true) : bText)
+    : '(no caption file next to this image)';
+  copyBtoABtn.disabled = !out.b_caption_exists;
+
+  bImgLoaded = false; bDraw();
+  const next = new Image();
+  next.onload = () => { bImg = next; bImgLoaded = true; bResize(); bFit(); bDraw(); };
+  next.onerror = () => { bImgLoaded = false; bDraw(); };
+  next.src = out.b_image_url + '?t=' + Date.now();
+}
+
+/* read-only B viewer (pan / zoom / fit; boxes drawn, no editing) */
+function bResize() {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = bImageWrap.clientWidth, ch = bImageWrap.clientHeight;
+  bCanvas.width = Math.max(1, Math.round(cw * dpr));
+  bCanvas.height = Math.max(1, Math.round(ch * dpr));
+  bCanvas.style.width = cw + 'px';
+  bCanvas.style.height = ch + 'px';
+}
+function bFit() {
+  if (!bImgLoaded) return;
+  const m = 12;
+  const cw = bImageWrap.clientWidth, ch = bImageWrap.clientHeight;
+  const s = Math.min((cw - 2 * m) / bImg.naturalWidth, (ch - 2 * m) / bImg.naturalHeight);
+  bView.scale = Math.max(0.02, Math.min(16, s));
+  bView.ox = (cw - bImg.naturalWidth * bView.scale) / 2;
+  bView.oy = (ch - bImg.naturalHeight * bView.scale) / 2;
+}
+function bElements() { return (bDoc && C.getElements(bDoc)) || []; }
+function bDraw() {
+  const dpr = window.devicePixelRatio || 1;
+  bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const cw = bCanvas.width / dpr, ch = bCanvas.height / dpr;
+  bctx.clearRect(0, 0, cw, ch);
+  bctx.fillStyle = '#0a0c11';
+  bctx.fillRect(0, 0, cw, ch);
+  if (!bImgLoaded) {
+    if (compareActive) {
+      bctx.fillStyle = '#8a90a6';
+      bctx.font = '14px system-ui';
+      bctx.fillText('No compare image for this item.', 18, 30);
+    }
+    return;
+  }
+  bctx.imageSmoothingEnabled = bView.scale < 2.5;
+  bctx.drawImage(bImg, bView.ox, bView.oy, bImg.naturalWidth * bView.scale, bImg.naturalHeight * bView.scale);
+  if (!showBboxes.checked) return;
+  const arr = bElements();
+  bctx.textBaseline = 'top';
+  bctx.font = '700 12px system-ui';
+  for (let i = 0; i < arr.length; i++) {
+    const rect = C.bboxToRect(arr[i].bbox, order(), coordMax(), bImg.naturalWidth, bImg.naturalHeight);
+    if (!rect) continue;
+    const x = bView.ox + rect.left * bView.scale, y = bView.oy + rect.top * bView.scale;
+    const w = rect.width * bView.scale, h = rect.height * bView.scale;
+    const color = C.colorForIndex(i);
+    if (bboxFill.checked) { bctx.fillStyle = color + '1d'; bctx.fillRect(x, y, w, h); }
+    bctx.lineWidth = 2;
+    bctx.strokeStyle = color;
+    bctx.strokeRect(x, y, w, h);
+    if (bboxLabels.checked) {
+      const text = C.shortLabel(arr[i], i);
+      const tw = bctx.measureText(text).width;
+      const lx = Math.max(0, Math.min(x, cw - tw - 10));
+      let ly = y - 18; if (ly < 0) ly = y + 2;
+      bctx.fillStyle = color;
+      bctx.fillRect(lx, ly, tw + 10, 17);
+      bctx.fillStyle = '#0c0e14';
+      bctx.fillText(text, lx + 5, ly + 3);
+    }
+  }
+}
+bCanvas.addEventListener('wheel', (e) => {
+  if (!bImgLoaded) return;
+  e.preventDefault();
+  const r = bCanvas.getBoundingClientRect();
+  const p = { x: e.clientX - r.left, y: e.clientY - r.top };
+  const ip = { x: (p.x - bView.ox) / bView.scale, y: (p.y - bView.oy) / bView.scale };
+  const ns = Math.max(0.02, Math.min(16, bView.scale * Math.exp(-e.deltaY * 0.0016)));
+  bView.scale = ns;
+  bView.ox = p.x - ip.x * ns;
+  bView.oy = p.y - ip.y * ns;
+  bDraw();
+}, { passive: false });
+bCanvas.addEventListener('pointerdown', (e) => {
+  if (!bImgLoaded) return;
+  bCanvas.setPointerCapture(e.pointerId);
+  bDrag = { x: e.clientX, y: e.clientY, ox: bView.ox, oy: bView.oy };
+  bCanvas.style.cursor = 'grabbing';
+});
+bCanvas.addEventListener('pointermove', (e) => {
+  if (!bDrag) return;
+  bView.ox = bDrag.ox + (e.clientX - bDrag.x);
+  bView.oy = bDrag.oy + (e.clientY - bDrag.y);
+  bDraw();
+});
+bCanvas.addEventListener('pointerup', () => { bDrag = null; bCanvas.style.cursor = 'grab'; });
+bCanvas.addEventListener('dblclick', () => { bFit(); bDraw(); });
+bCanvas.style.cursor = 'grab';
+
+/* copy B's caption into the A editor as unsaved changes */
+copyBtoABtn.addEventListener('click', () => {
+  if (!activeRel || copyBtoABtn.disabled) return;
+  if (dirty && !confirm('The A editor has unsaved changes. Replace them with B\u2019s caption?')) return;
+  setCaptionState(bText);
+  dirty = true;
+  rawDirtyPending = false;
+  setMessage('Loaded B\u2019s caption into the A editor (unsaved \u2014 review the boxes, then Save).');
+});
+
+/* manual match picker */
+bPickToggle.addEventListener('click', () => {
+  bPickWrap.classList.toggle('hidden');
+  if (!bPickWrap.classList.contains('hidden')) {
+    bPickSearch.value = '';
+    renderPickList('');
+    bPickSearch.focus();
+  }
+});
+bPickSearch.addEventListener('input', () => renderPickList(bPickSearch.value.trim().toLowerCase()));
+function renderPickList(q) {
+  bPickList.innerHTML = '';
+  const cur = overrideFor(activeRel);
+  const list = (q ? bImages.filter((b) => b.rel.toLowerCase().includes(q)) : bImages).slice(0, 200);
+  if (!list.length) {
+    const d = document.createElement('div');
+    d.className = 'muted';
+    d.textContent = 'No B files match.';
+    bPickList.appendChild(d);
+    return;
+  }
+  for (const b of list) {
+    const btn = document.createElement('button');
+    btn.textContent = b.rel;
+    btn.title = b.rel;
+    if (b.rel === cur) btn.classList.add('sel');
+    btn.addEventListener('click', () => {
+      setOverride(activeRel, b.rel);
+      bPickWrap.classList.add('hidden');
+      loadCompareItem(activeRel);
+    });
+    bPickList.appendChild(btn);
+  }
+}
+bPickClear.addEventListener('click', () => {
+  setOverride(activeRel, '');
+  bPickClear.classList.add('hidden');
+  loadCompareItem(activeRel);
+});
+
+loadCompareBtn.addEventListener('click', loadCompareFolder);
+compareFolder.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadCompareFolder(); });
+clearCompareBtn.addEventListener('click', clearCompare);
+compareFilter.addEventListener('change', renderList);
+bFitBtn.addEventListener('click', () => { bFit(); bDraw(); });
+
+const bResizeObserver = new ResizeObserver(() => { if (compareActive) { bResize(); bDraw(); } });
+bResizeObserver.observe(bImageWrap);
+
 /* ---------------- init ---------------- */
 loadPrefs();
+loadOverrides();
 bindTopFields();
 resizeCanvas();
 draw();
+bResize();
+bDraw();

@@ -5,6 +5,7 @@ description = "Local web UI for reviewing, rating, and editing image caption fil
 requires-python = ">=3.10"
 dependencies = [
     "flask==3.0.3",
+    "pillow>=10.0",
 ]
 
 [tool.uv]

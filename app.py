@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import time
@@ -5,6 +6,15 @@ from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, request, send_file, render_template
+
+# Pillow is optional. Without it, comparison still matches by filename stem and
+# by exact file bytes; only the perceptual (renamed/resized) tier is disabled.
+try:
+    from PIL import Image
+    HAVE_PIL = True
+except Exception:  # pragma: no cover - environment dependent
+    Image = None
+    HAVE_PIL = False
 
 APP_TITLE = "Caption Reviewer"
 ALLOWED_IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
@@ -45,6 +55,13 @@ app = Flask(__name__, template_folder=".", static_folder=".", static_url_path="/
 ACTIVE_ROOT: Path | None = None
 LAST_RECURSIVE = False
 
+# Optional second folder for side-by-side comparison. COMPARE_CACHE holds the
+# last computed match result so /api/compare-item and /media-b don't recompute.
+COMPARE_ROOT: Path | None = None
+COMPARE_RECURSIVE = False
+COMPARE_CACHE: dict[str, Any] = {}
+DEFAULT_MATCH_DISTANCE = 12
+
 
 def now_ts() -> float:
     return time.time()
@@ -67,12 +84,16 @@ def require_root() -> Path:
     return ACTIVE_ROOT
 
 
-def safe_resolve_under_root(rel_path: str) -> Path:
-    root = require_root().resolve()
+def safe_resolve_under(root: Path, rel_path: str) -> Path:
+    root = root.resolve()
     candidate = (root / rel_path).resolve()
     if root != candidate and root not in candidate.parents:
         raise RuntimeError("Path escaped target folder.")
     return candidate
+
+
+def safe_resolve_under_root(rel_path: str) -> Path:
+    return safe_resolve_under(require_root(), rel_path)
 
 
 def state_path(root: Path) -> Path:
@@ -145,6 +166,139 @@ def caption_preview(text: str, limit: int = 180) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
+
+
+# ---------------------------------------------------------------------------
+# Cross-folder image matching (for compare mode).
+#
+# Images in the two folders may not share names, so matches are found in three
+# tiers, each applied only to whatever is still unmatched:
+#   1. filename stem   -> img001.jpg pairs with img001.png
+#   2. exact bytes     -> same file, renamed
+#   3. perceptual hash -> same picture, re-encoded / resized / renamed (Pillow)
+# ---------------------------------------------------------------------------
+
+def file_sha256(path: Path) -> str | None:
+    try:
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return None
+
+
+def _lanczos_filter():
+    # Pillow >= 9.1 moved the resampling constants under Image.Resampling.
+    resampling = getattr(Image, "Resampling", None)
+    if resampling is not None and hasattr(resampling, "LANCZOS"):
+        return resampling.LANCZOS
+    return getattr(Image, "LANCZOS", 1)
+
+
+def perceptual_hash(path: Path, hash_size: int = 8) -> int | None:
+    """64-bit difference hash (dHash). Robust to scaling and re-compression."""
+    if not HAVE_PIL:
+        return None
+    try:
+        with Image.open(path) as im:
+            small = im.convert("L").resize((hash_size + 1, hash_size), _lanczos_filter())
+            px = list(small.getdata())
+    except Exception:
+        return None
+    bits = 0
+    width = hash_size + 1
+    for row in range(hash_size):
+        base = row * width
+        for col in range(hash_size):
+            bits = (bits << 1) | (1 if px[base + col] > px[base + col + 1] else 0)
+    return bits
+
+
+def hamming_distance(a: int, b: int) -> int:
+    # bin().count is portable across Python versions (no int.bit_count needed).
+    return bin(a ^ b).count("1")
+
+
+def compute_matches(
+    root_a: Path, rec_a: bool, root_b: Path, rec_b: bool, max_distance: int
+) -> dict[str, Any]:
+    imgs_a = scan_images(root_a, rec_a)
+    imgs_b = scan_images(root_b, rec_b)
+    rels_a = [p.relative_to(root_a).as_posix() for p in imgs_a]
+    rels_b = [p.relative_to(root_b).as_posix() for p in imgs_b]
+    path_a = dict(zip(rels_a, imgs_a))
+    path_b = dict(zip(rels_b, imgs_b))
+
+    matches: dict[str, dict[str, Any]] = {}   # a_rel -> {b_rel, method, distance}
+    used_b: set[str] = set()
+
+    # Tier 1: filename stem.
+    b_by_stem: dict[str, list[str]] = {}
+    for r in rels_b:
+        b_by_stem.setdefault(Path(r).stem.lower(), []).append(r)
+    for r in rels_a:
+        for cand in b_by_stem.get(Path(r).stem.lower(), []):
+            if cand not in used_b:
+                matches[r] = {"b_rel": cand, "method": "name", "distance": 0}
+                used_b.add(cand)
+                break
+
+    rem_a = [r for r in rels_a if r not in matches]
+    rem_b = [r for r in rels_b if r not in used_b]
+
+    # Tier 2: exact file bytes (catches pure renames).
+    if rem_a and rem_b:
+        b_hash: dict[str, str] = {}
+        for r in rem_b:
+            digest = file_sha256(path_b[r])
+            if digest:
+                b_hash.setdefault(digest, r)
+        for r in rem_a:
+            digest = file_sha256(path_a[r])
+            if digest and digest in b_hash and b_hash[digest] not in used_b:
+                target = b_hash[digest]
+                matches[r] = {"b_rel": target, "method": "bytes", "distance": 0}
+                used_b.add(target)
+        rem_a = [r for r in rem_a if r not in matches]
+        rem_b = [r for r in rels_b if r not in used_b]
+
+    # Tier 3: perceptual hash (same picture, re-encoded / resized).
+    if HAVE_PIL and rem_a and rem_b:
+        ah = {r: h for r in rem_a if (h := perceptual_hash(path_a[r])) is not None}
+        bh = {r: h for r in rem_b if (h := perceptual_hash(path_b[r])) is not None}
+        pairs: list[tuple[int, str, str]] = []
+        for ar, av in ah.items():
+            for br, bv in bh.items():
+                d = hamming_distance(av, bv)
+                if d <= max_distance:
+                    pairs.append((d, ar, br))
+        pairs.sort()
+        for d, ar, br in pairs:
+            if ar in matches or br in used_b:
+                continue
+            matches[ar] = {"b_rel": br, "method": "phash", "distance": d}
+            used_b.add(br)
+
+    by_method = {"name": 0, "bytes": 0, "phash": 0}
+    for m in matches.values():
+        by_method[m["method"]] = by_method.get(m["method"], 0) + 1
+
+    return {
+        "matches": matches,
+        "rels_b": rels_b,
+        "summary": {
+            "a_total": len(rels_a),
+            "b_total": len(rels_b),
+            "matched": len(matches),
+            "a_only": len(rels_a) - len(matches),
+            "b_only": len(rels_b) - len(used_b),
+            "by_method": by_method,
+        },
+        "have_pil": HAVE_PIL,
+        "max_distance": max_distance,
+    }
 
 
 def scan_images(root: Path, recursive: bool) -> list[Path]:
@@ -220,7 +374,7 @@ def index():
 
 @app.route("/api/open-folder", methods=["POST"])
 def open_folder():
-    global ACTIVE_ROOT, LAST_RECURSIVE
+    global ACTIVE_ROOT, LAST_RECURSIVE, COMPARE_ROOT, COMPARE_CACHE
     data = request.get_json(force=True)
     folder = (data.get("target_folder") or "").strip()
     recursive = bool(data.get("recursive", False))
@@ -232,6 +386,9 @@ def open_folder():
 
     ACTIVE_ROOT = root
     LAST_RECURSIVE = recursive
+    # A new primary folder invalidates any prior comparison.
+    COMPARE_ROOT = None
+    COMPARE_CACHE = {}
 
     # Ensure the state file exists, but never write state into caption files.
     state = load_state(root)
@@ -383,6 +540,113 @@ def media(rel: str):
 def get_state_file():
     root = require_root()
     return jsonify({"state_file": str(state_path(root)), "state": load_state(root)})
+
+
+@app.route("/api/open-compare-folder", methods=["POST"])
+def open_compare_folder():
+    global COMPARE_ROOT, COMPARE_RECURSIVE, COMPARE_CACHE
+    if ACTIVE_ROOT is None:
+        return jsonify({"error": "Open a primary folder first."}), 400
+    data = request.get_json(force=True)
+    folder = (data.get("compare_folder") or "").strip()
+    recursive = bool(data.get("recursive", False))
+    a_recursive = bool(data.get("a_recursive", LAST_RECURSIVE))
+    try:
+        max_distance = int(data.get("max_distance", DEFAULT_MATCH_DISTANCE))
+    except (TypeError, ValueError):
+        max_distance = DEFAULT_MATCH_DISTANCE
+    max_distance = max(0, min(64, max_distance))
+
+    if not folder:
+        return jsonify({"error": "Compare folder is required."}), 400
+    root_b = Path(folder).expanduser().resolve()
+    if not root_b.exists() or not root_b.is_dir():
+        return jsonify({"error": "Compare folder does not exist or is not a directory."}), 400
+    if root_b == ACTIVE_ROOT.resolve():
+        return jsonify({"error": "Compare folder is the same as the primary folder."}), 400
+
+    COMPARE_ROOT = root_b
+    COMPARE_RECURSIVE = recursive
+    result = compute_matches(ACTIVE_ROOT, a_recursive, root_b, recursive, max_distance)
+    COMPARE_CACHE = {
+        "a_root": str(ACTIVE_ROOT.resolve()),
+        "b_root": str(root_b),
+        "result": result,
+    }
+    return jsonify(
+        {
+            "ok": True,
+            "compare_root": str(root_b),
+            "recursive": recursive,
+            "have_pil": result["have_pil"],
+            "max_distance": max_distance,
+            "summary": result["summary"],
+            "matches": result["matches"],
+            "b_images": [{"rel": r, "filename": Path(r).name} for r in result["rels_b"]],
+        }
+    )
+
+
+@app.route("/api/compare-item", methods=["GET"])
+def compare_item():
+    if COMPARE_ROOT is None:
+        return jsonify({"error": "No compare folder is open."}), 400
+    a_rel = request.args.get("rel", "")
+    override = request.args.get("b_rel", "").strip()
+    result = COMPARE_CACHE.get("result") or {}
+    matches = result.get("matches", {})
+
+    if override:
+        b_rel, method, distance, overridden = override, "manual", None, True
+    else:
+        m = matches.get(a_rel)
+        if not m:
+            return jsonify({"matched": False, "overridden": False})
+        b_rel, method, distance, overridden = m["b_rel"], m["method"], m["distance"], False
+
+    try:
+        b_path = safe_resolve_under(COMPARE_ROOT, b_rel)
+    except RuntimeError:
+        return jsonify({"matched": False, "overridden": overridden, "error": "Bad path."})
+    if not b_path.exists() or not b_path.is_file() or not allowed_image(b_path):
+        return jsonify({"matched": False, "overridden": overridden, "error": "Matched image not found."})
+
+    caption_path = image_to_caption_path(b_path)
+    return jsonify(
+        {
+            "matched": True,
+            "overridden": overridden,
+            "method": method,
+            "distance": distance,
+            "b_rel": b_rel,
+            "b_filename": b_path.name,
+            "b_image_url": f"/media-b/{b_rel}",
+            "b_caption": read_caption(b_path),
+            "b_caption_path": str(caption_path),
+            "b_caption_exists": caption_path.exists(),
+        }
+    )
+
+
+@app.route("/api/compare-clear", methods=["POST"])
+def compare_clear():
+    global COMPARE_ROOT, COMPARE_CACHE
+    COMPARE_ROOT = None
+    COMPARE_CACHE = {}
+    return jsonify({"ok": True})
+
+
+@app.route("/media-b/<path:rel>")
+def media_b(rel: str):
+    if COMPARE_ROOT is None:
+        return jsonify({"error": "No compare folder is open."}), 404
+    try:
+        image_path = safe_resolve_under(COMPARE_ROOT, rel)
+    except RuntimeError:
+        return jsonify({"error": "Image not found."}), 404
+    if not image_path.exists() or not image_path.is_file() or not allowed_image(image_path):
+        return jsonify({"error": "Image not found."}), 404
+    return send_file(image_path)
 
 
 if __name__ == "__main__":
