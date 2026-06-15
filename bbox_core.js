@@ -49,39 +49,93 @@
     return text + stack.reverse().join('');
   }
 
-  // -> { doc, plain, repaired, error }
+  function parseJsonObject(text) {
+    const doc = JSON.parse(text);
+    return (doc && typeof doc === 'object' && !Array.isArray(doc)) ? doc : null;
+  }
+
+  function repairJsonText(text) {
+    const raw = String(text == null ? '' : text);
+    const trimmed = raw.trim();
+    const candidates = [];
+    if (trimmed) candidates.push({ text: trimmed, kind: 'trimmed' });
+    const firstBrace = trimmed.indexOf('{');
+    if (firstBrace > 0) candidates.push({ text: trimmed.slice(firstBrace), kind: 'stripped leading text' });
+
+    for (const cand of candidates) {
+      try {
+        const doc = parseJsonObject(cand.text);
+        if (doc) return { text: cand.text, kind: cand.kind === 'trimmed' ? '' : cand.kind };
+      } catch (e) { /* try other repairs */ }
+
+      const fixed = repairTruncatedJSON(cand.text);
+      if (fixed !== null) {
+        try {
+          const doc = parseJsonObject(fixed);
+          if (doc) return { text: fixed, kind: cand.kind ? cand.kind + ' + closed truncation' : 'closed truncation' };
+        } catch (e) { /* try trailing trim */ }
+      }
+
+      // Remove accidental text after a complete JSON object by repeatedly testing
+      // closing braces from the end toward the beginning. This intentionally only
+      // accepts a real JSON object; it does not invent structure in the middle.
+      for (let i = cand.text.lastIndexOf('}'); i >= 0; i = cand.text.lastIndexOf('}', i - 1)) {
+        const maybe = cand.text.slice(0, i + 1);
+        try {
+          const doc = parseJsonObject(maybe);
+          if (doc) {
+            const prefix = cand.kind && cand.kind !== 'trimmed' ? cand.kind + ' + ' : '';
+            return { text: maybe, kind: prefix + 'stripped trailing text' };
+          }
+        } catch (e) { /* continue */ }
+      }
+    }
+    return null;
+  }
+
+  // -> { doc, plain, repaired, repairKind, repairedText, error }
   //   doc      parsed object (or null)
   //   plain    true when the caption is not JSON at all (free text)
-  //   repaired true when truncation repair was needed and succeeded
-  //   error    message when it looks like JSON but cannot be parsed
-  function parseCaptionDoc(text) {
-    const out = { doc: null, plain: false, repaired: false, error: null };
+  //   repaired true when repair was needed and succeeded
+  //   error    message when it looks like JSON but could not be parsed
+  function parseCaptionDoc(text, opts) {
+    opts = opts || {};
+    const allowRepair = opts.repair !== false;
+    const out = { doc: null, plain: false, repaired: false, repairKind: '', repairedText: null, error: null };
     const trimmed = String(text == null ? '' : text).trim();
     if (!trimmed.startsWith('{')) {
+      if (allowRepair && trimmed.includes('{')) {
+        const fixedLeading = repairJsonText(trimmed);
+        if (fixedLeading) {
+          out.doc = parseJsonObject(fixedLeading.text);
+          out.repaired = !!fixedLeading.kind;
+          out.repairKind = fixedLeading.kind;
+          out.repairedText = fixedLeading.text;
+          return out;
+        }
+      }
       out.plain = true;
       return out;
     }
     try {
-      const doc = JSON.parse(trimmed);
-      if (doc && typeof doc === 'object' && !Array.isArray(doc)) {
-        out.doc = doc;
-        return out;
-      }
+      const doc = parseJsonObject(trimmed);
+      if (doc) { out.doc = doc; return out; }
       out.error = 'Top-level JSON is not an object.';
       return out;
     } catch (e) { /* try repair */ }
-    const fixed = repairTruncatedJSON(trimmed);
-    if (fixed !== null) {
-      try {
-        const doc = JSON.parse(fixed);
-        if (doc && typeof doc === 'object' && !Array.isArray(doc)) {
-          out.doc = doc;
-          out.repaired = true;
-          return out;
-        }
-      } catch (e) { /* fall through */ }
+    if (allowRepair) {
+      const fixed = repairJsonText(trimmed);
+      if (fixed) {
+        out.doc = parseJsonObject(fixed.text);
+        out.repaired = !!fixed.kind;
+        out.repairKind = fixed.kind;
+        out.repairedText = fixed.text;
+        return out;
+      }
     }
-    out.error = 'Caption looks like JSON but could not be parsed (and is not a simple truncation).';
+    out.error = allowRepair
+      ? 'Caption looks like JSON but could not be parsed or safely repaired.'
+      : 'Caption looks like JSON but could not be parsed. JSON auto-repair is off.';
     return out;
   }
 
@@ -317,6 +371,7 @@
   return {
     MAX_REPAIR_CLOSERS,
     repairTruncatedJSON,
+    repairJsonText,
     parseCaptionDoc,
     getElements,
     ensureSkeleton,

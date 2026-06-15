@@ -58,6 +58,7 @@ input, select, textarea {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  transition: margin .18s ease;
 }
 
 /* ---- slim app bar ---- */
@@ -93,7 +94,10 @@ input, select, textarea {
 .bar-btn.icon { padding: 6px 9px; }
 .bar-status { color: var(--good); font-size: 12px; max-width: 28vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-status.error { color: var(--bad); }
-.pos-indicator { flex: none; color: var(--muted); font-size: 12px; white-space: nowrap; min-width: 0; }
+.pos-indicator {
+  border: 0;
+  background: transparent;
+  padding: 0; flex: none; color: var(--muted); font-size: 12px; white-space: nowrap; min-width: 0; }
 
 /* ---- slim tool strip ---- */
 .toolstrip {
@@ -438,4 +442,20 @@ kbd { background: #1b2232; border: 1px solid var(--border); border-bottom-width:
   .review-view.comparing { flex-direction: column; }
   .drawer.left, .drawer.right { width: 92vw; }
   .active-name { max-width: 40vw; }
+}
+
+
+@media (min-width: 900px) {
+  body.browse-open .app { margin-left: 400px; }
+  body.editor-open .app { margin-right: 460px; }
+  body.browse-open.editor-open .app { margin-left: 400px; margin-right: 460px; }
+}
+
+body.dirty .active-name::after {
+  content: " *";
+  color: var(--warn);
+}
+.item.dirty .name::after {
+  content: " *";
+  color: var(--warn);
 }

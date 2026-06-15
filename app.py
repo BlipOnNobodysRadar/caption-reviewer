@@ -80,6 +80,24 @@ def normalize_status(status: str | None) -> str | None:
     return status if status in STATUS_OPTIONS else None
 
 
+
+def choose_folder_dialog() -> str | None:
+    """Open a native OS directory picker on the local server machine."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:  # pragma: no cover - depends on desktop env
+        raise RuntimeError(f"OS folder picker is unavailable: {exc}") from exc
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        selected = filedialog.askdirectory(title="Choose caption-review dataset folder")
+    finally:
+        root.destroy()
+    return selected or None
+
 def require_root() -> Path:
     if ACTIVE_ROOT is None:
         raise RuntimeError("No target folder is open yet.")
@@ -379,6 +397,20 @@ def build_counts(root: Path, recursive: bool) -> dict[str, int]:
 def index():
     return render_template("index.html", app_title=APP_TITLE)
 
+
+
+@app.route("/api/pick-folder", methods=["POST"])
+def pick_folder():
+    try:
+        selected = choose_folder_dialog()
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    if not selected:
+        return jsonify({"ok": True, "path": ""})
+    path = Path(selected).expanduser().resolve()
+    if not path.exists() or not path.is_dir():
+        return jsonify({"error": "Selected path is not a directory."}), 400
+    return jsonify({"ok": True, "path": str(path)})
 
 @app.route("/api/open-folder", methods=["POST"])
 def open_folder():
