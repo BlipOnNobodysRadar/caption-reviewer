@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 import time
 from io import BytesIO
 from pathlib import Path
@@ -79,6 +81,101 @@ def normalize_status(status: str | None) -> str | None:
     status = status.strip().lower()
     return status if status in STATUS_OPTIONS else None
 
+
+
+def run_windows_folder_picker() -> str | None:
+    """Use the Windows shell folder browser instead of Tkinter."""
+    if sys.platform != "win32":
+        return None
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell") or shutil.which("pwsh")
+    if not powershell:
+        return None
+    script = r'''
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = 'Choose caption-review dataset folder'
+$dialog.ShowNewFolderButton = $true
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::Out.Write($dialog.SelectedPath)
+}
+'''
+    cmd = [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
+    # Windows PowerShell supports -Sta, which keeps WinForms dialogs reliable.
+    if Path(powershell).name.lower().startswith("powershell"):
+        cmd.insert(1, "-Sta")
+    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if proc.returncode == 0:
+        selected = proc.stdout.strip()
+        return selected or None
+    return None
+
+
+def run_macos_folder_picker() -> str | None:
+    """Use macOS Finder's native folder picker when running on macOS."""
+    if sys.platform != "darwin" or not shutil.which("osascript"):
+        return None
+    proc = subprocess.run(
+        ["osascript", "-e", 'POSIX path of (choose folder with prompt "Choose caption-review dataset folder")'],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode == 0:
+        selected = proc.stdout.strip()
+        return selected or None
+    return None
+
+
+def run_linux_folder_picker() -> str | None:
+    """Use a native Linux desktop folder picker command when one is available."""
+    if sys.platform != "linux" or not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return None
+
+    commands = [
+        ["zenity", "--file-selection", "--directory", "--title=Choose caption-review dataset folder"],
+        ["kdialog", "--getexistingdirectory", str(Path.home()), "Choose caption-review dataset folder"],
+        ["yad", "--file-selection", "--directory", "--title=Choose caption-review dataset folder"],
+    ]
+    for cmd in commands:
+        if not shutil.which(cmd[0]):
+            continue
+        proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+        if proc.returncode == 0:
+            selected = proc.stdout.strip()
+            return selected or None
+        # Common cancel codes mean the user intentionally closed the picker.
+        if proc.returncode in {1, 130, 252}:
+            return None
+    return None
+
+
+def run_external_folder_picker() -> str | None:
+    """Use the host OS's native folder picker before falling back to Tkinter."""
+    return run_windows_folder_picker() or run_macos_folder_picker() or run_linux_folder_picker()
+
+
+def choose_folder_dialog() -> str | None:
+    """Open a native OS directory picker on the local server machine."""
+    selected = run_external_folder_picker()
+    if selected:
+        return selected
+
+    # Last-resort fallback for environments without a native OS picker command. This is
+    # less native-looking on some desktops, so prefer the native pickers above.
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:  # pragma: no cover - depends on desktop env
+        raise RuntimeError(f"OS folder picker is unavailable: {exc}") from exc
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        selected = filedialog.askdirectory(title="Choose caption-review dataset folder")
+    finally:
+        root.destroy()
+    return selected or None
 
 def require_root() -> Path:
     if ACTIVE_ROOT is None:
@@ -379,6 +476,20 @@ def build_counts(root: Path, recursive: bool) -> dict[str, int]:
 def index():
     return render_template("index.html", app_title=APP_TITLE)
 
+
+
+@app.route("/api/pick-folder", methods=["POST"])
+def pick_folder():
+    try:
+        selected = choose_folder_dialog()
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    if not selected:
+        return jsonify({"ok": True, "path": ""})
+    path = Path(selected).expanduser().resolve()
+    if not path.exists() or not path.is_dir():
+        return jsonify({"error": "Selected path is not a directory."}), 400
+    return jsonify({"ok": True, "path": str(path)})
 
 @app.route("/api/open-folder", methods=["POST"])
 def open_folder():

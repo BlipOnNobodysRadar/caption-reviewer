@@ -6,7 +6,7 @@ const C = window.BBoxCore;
 
 /* ---------------- DOM ---------------- */
 const $ = (id) => document.getElementById(id);
-const targetFolder = $('targetFolder'), recursive = $('recursive'), openFolderBtn = $('openFolder');
+const targetFolder = $('targetFolder'), recursive = $('recursive'), openFolderBtn = $('openFolder'), pickFolderBtn = $('pickFolder');
 const backupOriginals = $('backupOriginals');
 const statusFilter = $('statusFilter'), sortBy = $('sortBy'), searchBox = $('searchBox'), countsEl = $('counts');
 const listEl = $('itemList'), listCountEl = $('listCount');
@@ -17,6 +17,7 @@ const zoomOutBtn = $('zoomOutBtn'), zoomInBtn = $('zoomInBtn'), zoomLabel = $('z
 const showBboxes = $('showBboxes'), bboxLabels = $('bboxLabels'), bboxFill = $('bboxFill'), focusMode = $('focusMode');
 const bboxFormat = $('bboxFormat'), bboxCoordMax = $('bboxCoordMax');
 const coordReadout = $('coordReadout'), issuesChip = $('issuesChip');
+const nextJsonIssueBtn = $('nextJsonIssue'), nextBoxIssueBtn = $('nextBoxIssue'), nextMissingCaptionBtn = $('nextMissingCaption');
 const imageWrap = $('imageWrap'), imageCanvas = $('imageCanvas');
 const ctx = imageCanvas.getContext('2d');
 const ratingButtons = $('ratingButtons'), clearStatusBtn = $('clearStatus');
@@ -28,11 +29,11 @@ const fldArt = $('fld_art'), fldMedium = $('fld_medium'), fldStylePalette = $('f
 const fldBackground = $('fld_background');
 const elementsCount = $('elementsCount'), elementsList = $('elementsList');
 const captionText = $('captionText'), captionPath = $('captionPath');
-const rawApplyBtn = $('rawApplyBtn'), rawStatus = $('rawStatus');
+const rawApplyBtn = $('rawApplyBtn'), repairJsonBtn = $('repairJsonBtn'), rawStatus = $('rawStatus');
 const saveFormat = $('saveFormat'), saveCaptionBtn = $('saveCaption'), saveFixedBtn = $('saveFixed');
 const removePairBtn = $('removePair'), deletePairBtn = $('deletePair');
 const saveStatus = $('saveStatus');
-const saveNextBtn = $('saveNext'), advanceOnRate = $('advanceOnRate');
+const saveNextBtn = $('saveNext'), advanceOnRate = $('advanceOnRate'), autoRepairJson = $('autoRepairJson');
 const posIndicator = $('posIndicator'), recentFoldersList = $('recentFolders');
 /* layout: app-bar toggles, slide-in drawers, floating hover tooltip */
 const browseToggle = $('browseToggle'), editorToggle = $('editorToggle');
@@ -43,7 +44,7 @@ const bCol = $('bCol'), boxTip = $('boxTip');
 /* ---------------- state ---------------- */
 let items = [], activeRel = null, activeIndex = -1;
 let originalText = '';
-let doc = null, plain = false, parseError = null, parseRepaired = false;
+let doc = null, plain = false, parseError = null, parseRepaired = false, parseRepairKind = "";
 let selectedIdx = -1, hoverIdx = -1;
 let mode = 'select';            // 'select' | 'draw'
 let drawSticky = false;         // B key keeps draw mode after one box
@@ -86,9 +87,14 @@ function debounce(fn, ms) {
 function order() { return bboxFormat.value === 'xyxy' ? 'xyxy' : 'yxyx'; }
 function coordMax() { return Math.max(1, Number(bboxCoordMax.value) || 1000); }
 function elements() { return (doc && C.getElements(doc)) || []; }
+function updateDirtyUi() {
+  document.body.classList.toggle('dirty', dirty);
+  renderList(false);
+}
 function markDirty() {
   if (!dirty) setMessage('Unsaved changes.');
   dirty = true;
+  updateDirtyUi();
 }
 
 /* prefs */
@@ -106,6 +112,7 @@ function loadPrefs() {
   if (typeof p.bboxLabels === 'boolean') bboxLabels.checked = p.bboxLabels;
   if (typeof p.bboxFill === 'boolean') bboxFill.checked = p.bboxFill;
   if (typeof p.advanceOnRate === 'boolean') advanceOnRate.checked = p.advanceOnRate;
+  if (typeof p.autoRepairJson === 'boolean') autoRepairJson.checked = p.autoRepairJson;
   if (p.statusFilter) statusFilter.value = p.statusFilter;
   if (p.sortBy) sortBy.value = p.sortBy;
   if (typeof p.recursive === 'boolean') recursive.checked = p.recursive;
@@ -123,7 +130,9 @@ function writePrefs() {
       advanceOnRate: advanceOnRate.checked,
       statusFilter: statusFilter.value, sortBy: sortBy.value, recursive: recursive.checked,
       search: searchBox.value, recentFolders: recentFolders.slice(0, 10),
-      lastFolder: lastOpenedFolder || targetFolder.value || '', lastActiveRel: activeRel || ''
+      lastFolder: lastOpenedFolder || targetFolder.value || '', lastActiveRel: activeRel || '',
+      autoRepairJson: autoRepairJson.checked, activeTab,
+      browseOpen: browseDrawer.classList.contains('open'), editorOpen: editorDrawer.classList.contains('open')
     }));
   } catch (e) { /* ignore (private mode / quota) */ }
 }
@@ -227,6 +236,7 @@ function renderList(scrollActive = false) {
     const div = document.createElement('button');
     div.className = `item ${statusClasses[item.status] || ''}`;
     if (item.rel === activeRel) { div.classList.add('active'); activeEl = div; }
+    if (dirty && item.rel === activeRel) div.classList.add('dirty');
     div.innerHTML = `
       <img class="item-thumb" loading="lazy" alt="" src="${thumbUrl(item.rel)}">
       <div class="item-body">
@@ -255,6 +265,28 @@ function renderList(scrollActive = false) {
   }
   if (scrollActive === true && activeEl) activeEl.scrollIntoView({ block: 'nearest' });
 }
+
+async function pickFolder() {
+  if (dirty && !confirm('Caption has unsaved changes. Continue choosing a different folder?')) return;
+  pickFolderBtn.disabled = true;
+  pickFolderBtn.textContent = 'Picking…';
+  try {
+    const res = await fetch('/api/pick-folder', { method: 'POST' });
+    const out = await res.json();
+    if (out.error) throw new Error(out.error);
+    if (out.path) {
+      targetFolder.value = out.path;
+      rememberFolder(out.path);
+      await openFolder();
+    }
+  } catch (e) {
+    alert('Folder picker error: ' + e.message);
+  } finally {
+    pickFolderBtn.disabled = false;
+    pickFolderBtn.textContent = 'Pick folder…';
+  }
+}
+
 async function openFolder(opts = {}) {
   const folder = targetFolder.value.trim();
   if (!folder) return;
@@ -268,7 +300,7 @@ async function openFolder(opts = {}) {
     });
     const out = await res.json();
     if (out.error) throw new Error(out.error);
-    dirty = false; rawDirtyPending = false;
+    dirty = false; rawDirtyPending = false; updateDirtyUi();
     items = out.items || [];
     resetCompareForNewFolder();
     activeRel = null; activeIndex = -1;
@@ -309,13 +341,56 @@ async function refreshList(keepActive = true) {
   if (keepActive && activeRel) activeIndex = items.findIndex((x) => x.rel === activeRel);
   renderList();
 }
+function jumpToVisibleIndex(idx) {
+  const vis = visibleItems();
+  if (!vis.length) return;
+  idx = Math.max(0, Math.min(vis.length - 1, idx));
+  if (vis[idx]) loadItem(vis[idx].rel);
+}
 function move(delta) {
   const vis = visibleItems();
   if (!vis.length) return;
   let idx = vis.findIndex((x) => x.rel === activeRel);
   idx = (idx < 0) ? 0 : Math.max(0, Math.min(vis.length - 1, idx + delta));
-  if (vis[idx]) loadItem(vis[idx].rel);
+  jumpToVisibleIndex(idx);
 }
+function promptJumpToIndex() {
+  const vis = visibleItems();
+  if (!vis.length) return;
+  const cur = Math.max(1, vis.findIndex((x) => x.rel === activeRel) + 1);
+  const val = prompt(`Jump to item number (1-${vis.length})`, String(cur));
+  if (val == null) return;
+  const n = Number(val);
+  if (Number.isFinite(n)) jumpToVisibleIndex(Math.round(n) - 1);
+}
+
+async function loadCaptionForRel(rel) {
+  const res = await fetch('/api/item?rel=' + encodeURIComponent(rel));
+  const out = await res.json();
+  if (out.error) throw new Error(out.error);
+  return out.caption || '';
+}
+async function moveToNextProblem(kind) {
+  const vis = visibleItems();
+  if (!vis.length) return;
+  const start = vis.findIndex((x) => x.rel === activeRel);
+  setMessage(`Scanning for next ${kind.replace('-', ' ')}…`);
+  for (let step = 1; step <= vis.length; step++) {
+    const it = vis[((start < 0 ? -1 : start) + step) % vis.length];
+    if (!it) continue;
+    try {
+      const text = await loadCaptionForRel(it.rel);
+      if (kind === 'missing' && !text.trim()) { await loadItem(it.rel); return; }
+      const parsed = C.parseCaptionDoc(text, { repair: autoRepairJson.checked });
+      if (kind === 'json' && (parsed.error || parsed.repaired || parsed.plain)) { await loadItem(it.rel); return; }
+      if (kind === 'box' && parsed.doc && C.validateDoc(parsed.doc, coordMax()).length) { await loadItem(it.rel); return; }
+    } catch (e) {
+      if (kind === 'json') { await loadItem(it.rel); return; }
+    }
+  }
+  setMessage(`No ${kind.replace('-', ' ')} item found in the current list.`);
+}
+
 function moveToNextUnrated() {
   const vis = visibleItems();
   if (!vis.length) return;
@@ -385,8 +460,8 @@ async function loadItem(rel) {
   updateButtons(out.status);
 
   setCaptionState(out.caption || '');
-  dirty = false;
-  setMessage(parseRepaired ? 'Loaded with truncated-JSON repair.' : '');
+  dirty = false; updateDirtyUi();
+  setMessage(parseRepaired ? `Loaded with JSON repair${parseRepairKind ? ` (${parseRepairKind})` : ""}.` : '');
 
   imgLoaded = false;
   draw();
@@ -406,13 +481,13 @@ async function loadItem(rel) {
 
 function setCaptionState(text) {
   originalText = text;
-  const r = C.parseCaptionDoc(text);
-  doc = r.doc; plain = r.plain; parseError = r.error; parseRepaired = r.repaired;
+  const r = C.parseCaptionDoc(text, { repair: autoRepairJson.checked });
+  doc = r.doc; plain = r.plain; parseError = r.error; parseRepaired = r.repaired; parseRepairKind = r.repairKind || "";
   selectedIdx = -1; hoverIdx = -1; pendingDrawIdx = null;
   setMode('select');
   undoStack = []; redoStack = [];
   rawDirtyPending = false;
-  captionText.value = text;
+  captionText.value = r.repairedText || text;
   rawStatus.textContent = '';
   switchTab(doc ? 'fields' : 'raw', true);
   renderFieldsTop(); renderElements(); refreshIssues();
@@ -453,7 +528,7 @@ function renderFieldsTop() {
     convertBtn.classList.remove('hidden');
   } else if (parseRepaired) {
     fieldsNotice.classList.remove('hidden');
-    fieldsNoticeText.textContent = 'Truncated JSON was repaired on load \u2014 saving writes the complete version.';
+    fieldsNoticeText.textContent = `JSON was repaired on load${parseRepairKind ? ` (${parseRepairKind})` : ''} — saving writes the repaired version.`;
   }
   const sd = (doc && doc.style_description) || {};
   const comp = (doc && doc.compositional_deconstruction) || {};
@@ -1051,12 +1126,13 @@ function switchTab(tab, force = false) {
   if (tab === 'raw' && doc && !rawDirtyPending) syncRawFromDoc();
 }
 function tryApplyRaw() {
-  const r = C.parseCaptionDoc(captionText.value);
+  const r = C.parseCaptionDoc(captionText.value, { repair: autoRepairJson.checked });
   if (r.doc) {
     pushUndoMaybe();
-    doc = r.doc; plain = false; parseError = null; parseRepaired = r.repaired;
+    doc = r.doc; plain = false; parseError = null; parseRepaired = r.repaired; parseRepairKind = r.repairKind || "";
+    if (r.repairedText) captionText.value = r.repairedText;
     rawDirtyPending = false;
-    rawStatus.textContent = r.repaired ? 'Applied (repaired truncation).' : 'Applied.';
+    rawStatus.textContent = r.repaired ? `Applied (${r.repairKind || 'repaired JSON'}).` : 'Applied.';
     rawStatus.className = 'raw-status ok';
     renderFieldsTop(); renderElements(); refreshIssues(); draw();
     return true;
@@ -1074,10 +1150,10 @@ function tryApplyRaw() {
   return false;
 }
 const liveRawParse = debounce(() => {
-  const r = C.parseCaptionDoc(captionText.value);
+  const r = C.parseCaptionDoc(captionText.value, { repair: autoRepairJson.checked });
   if (r.doc) {
-    doc = r.doc; plain = false; parseError = null; parseRepaired = r.repaired;
-    rawStatus.textContent = r.repaired ? 'Valid after truncation repair.' : 'Valid JSON.';
+    doc = r.doc; plain = false; parseError = null; parseRepaired = r.repaired; parseRepairKind = r.repairKind || "";
+    rawStatus.textContent = r.repaired ? `Valid after repair (${r.repairKind || 'JSON repair'}).` : 'Valid JSON.';
     rawStatus.className = 'raw-status ok';
     refreshIssues(); draw();
   } else if (r.plain) {
@@ -1094,6 +1170,16 @@ captionText.addEventListener('input', () => {
   liveRawParse();
 });
 rawApplyBtn.addEventListener('click', () => { if (tryApplyRaw()) switchTab('fields'); });
+repairJsonBtn.addEventListener('click', () => {
+  const fixed = C.repairJsonText(captionText.value);
+  if (!fixed) { rawStatus.textContent = 'No safe repair found.'; rawStatus.className = 'raw-status error'; return; }
+  captionText.value = fixed.text;
+  rawDirtyPending = true;
+  markDirty();
+  rawStatus.textContent = fixed.kind ? `Repaired: ${fixed.kind}.` : 'Already valid JSON.';
+  rawStatus.className = 'raw-status ok';
+  tryApplyRaw();
+});
 convertBtn.addEventListener('click', () => {
   doc = C.ensureSkeleton(captionText.value);
   plain = false; parseError = null;
@@ -1129,7 +1215,7 @@ async function removeActivePair(mode) {
   const out = await res.json();
   if (out.error) { setMessage(out.error, true); return; }
 
-  dirty = false; rawDirtyPending = false; activeRel = null; activeIndex = -1;
+  dirty = false; rawDirtyPending = false; updateDirtyUi(); activeRel = null; activeIndex = -1;
   setCaptionState('');
   imgLoaded = false;
   bImgLoaded = false; bText = ''; bDoc = null;
@@ -1156,7 +1242,7 @@ async function saveCaption(markFixed = false) {
   });
   const out = await res.json();
   if (out.error) { setMessage(out.error, true); return; }
-  dirty = false; rawDirtyPending = false;
+  dirty = false; rawDirtyPending = false; updateDirtyUi();
   originalText = text;
   if (doc) captionText.value = text;
   const backupNote = out.backup ? ' Original backed up.' : '';
@@ -1182,6 +1268,7 @@ document.addEventListener('keydown', (ev) => {
   if (ev.ctrlKey || ev.metaKey) {
     const k = ev.key.toLowerCase();
     if (k === 's') { ev.preventDefault(); saveCaption(false); }
+    else if (k === 'p') { ev.preventDefault(); setDrawer(browseDrawer, true); searchBox.focus(); searchBox.select(); }
     else if (k === 'enter') { ev.preventDefault(); saveAndNext(false); }
     else if (k === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); }
     else if (k === 'y') { ev.preventDefault(); redo(); }
@@ -1195,8 +1282,12 @@ document.addEventListener('keydown', (ev) => {
   const map = { '1': 'excellent', '2': 'good_enough', '3': 'needs_work', '4': 'bad', '5': 'terrible', '6': 'fixed' };
   const k = ev.key;
   if (map[k]) { setStatus(map[k]); }
-  else if (k === '[') { move(-1); }
-  else if (k === ']') { move(1); }
+  else if (k === '[') { move(ev.shiftKey ? -10 : -1); }
+  else if (k === ']') { move(ev.shiftKey ? 10 : 1); }
+  else if (k === 'Home') { ev.preventDefault(); jumpToVisibleIndex(0); }
+  else if (k === 'End') { ev.preventDefault(); jumpToVisibleIndex(visibleItems().length - 1); }
+  else if (k === 'PageUp') { ev.preventDefault(); move(-10); }
+  else if (k === 'PageDown') { ev.preventDefault(); move(10); }
   else if (k === 'n' || k === 'N') { moveToNextUnrated(); }
   else if (k === 'v' || k === 'V') { setMode('select'); }
   else if (k === 'b' || k === 'B') { drawSticky = true; setMode('draw'); }
@@ -1226,6 +1317,7 @@ document.addEventListener('keyup', (ev) => {
 
 /* ---------------- wiring ---------------- */
 openFolderBtn.addEventListener('click', () => openFolder());
+pickFolderBtn.addEventListener('click', pickFolder);
 targetFolder.addEventListener('keydown', (e) => { if (e.key === 'Enter') openFolder(); });
 statusFilter.addEventListener('change', () => { refreshList(false); savePrefs(); });
 sortBy.addEventListener('change', () => { refreshList(true); savePrefs(); });
@@ -1236,10 +1328,14 @@ ratingButtons.addEventListener('click', (ev) => {
   if (btn) setStatus(btn.dataset.status);
 });
 clearStatusBtn.addEventListener('click', clearStatus);
+nextJsonIssueBtn.addEventListener('click', () => moveToNextProblem('json'));
+nextBoxIssueBtn.addEventListener('click', () => moveToNextProblem('box'));
+nextMissingCaptionBtn.addEventListener('click', () => moveToNextProblem('missing'));
 saveCaptionBtn.addEventListener('click', () => saveCaption(false));
 saveNextBtn.addEventListener('click', () => saveAndNext(false));
 saveFixedBtn.addEventListener('click', () => saveCaption(true));
 advanceOnRate.addEventListener('change', savePrefs);
+autoRepairJson.addEventListener('change', savePrefs);
 removePairBtn.addEventListener('click', () => removeActivePair('move'));
 deletePairBtn.addEventListener('click', () => removeActivePair('delete'));
 prevItemBtn.addEventListener('click', () => move(-1));
@@ -1270,11 +1366,30 @@ saveFormat.addEventListener('change', savePrefs);
 backupOriginals.addEventListener('change', savePrefs);
 window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
-const ro = new ResizeObserver(() => { resizeCanvas(); draw(); });
+function refitPrimaryCanvas() {
+  resizeCanvas();
+  fitView();
+  draw();
+}
+function refitCanvasesAfterLayoutChange() {
+  const delays = [0, 80, 220];
+  for (const delay of delays) {
+    setTimeout(() => {
+      refitPrimaryCanvas();
+      if (compareActive) { bResize(); bFit(); bDraw(); }
+    }, delay);
+  }
+}
+const ro = new ResizeObserver(() => { refitPrimaryCanvas(); });
 ro.observe(imageWrap);
 
 /* ---------------- drawers (collapsible side panels) ---------------- */
-function setDrawer(el, open) { el.classList.toggle('open', open); }
+function updateLayoutClasses() {
+  document.body.classList.toggle('browse-open', browseDrawer.classList.contains('open'));
+  document.body.classList.toggle('editor-open', editorDrawer.classList.contains('open'));
+  requestAnimationFrame(() => { refitCanvasesAfterLayoutChange(); savePrefs(); });
+}
+function setDrawer(el, open) { el.classList.toggle('open', open); updateLayoutClasses(); }
 function toggleDrawer(el) { setDrawer(el, !el.classList.contains('open')); }
 function anyDrawerOpen() { return browseDrawer.classList.contains('open') || editorDrawer.classList.contains('open'); }
 function closeDrawers() { setDrawer(browseDrawer, false); setDrawer(editorDrawer, false); }
@@ -1282,6 +1397,10 @@ browseToggle.addEventListener('click', () => toggleDrawer(browseDrawer));
 editorToggle.addEventListener('click', () => toggleDrawer(editorDrawer));
 browseClose.addEventListener('click', () => setDrawer(browseDrawer, false));
 editorClose.addEventListener('click', () => setDrawer(editorDrawer, false));
+posIndicator.addEventListener('click', promptJumpToIndex);
+document.querySelector('.app').addEventListener('transitionend', (ev) => {
+  if (ev.propertyName === 'margin-left' || ev.propertyName === 'margin-right') refitCanvasesAfterLayoutChange();
+});
 
 /* ---------------- floating per-box caption tooltip ---------------- *
  * Shared by both canvases: hover a box to read that object's full caption
@@ -1672,6 +1791,11 @@ bResizeObserver.observe(bImageWrap);
 
 /* ---------------- init ---------------- */
 loadPrefs();
+if (typeof lastPrefs.browseOpen === 'boolean') browseDrawer.classList.toggle('open', lastPrefs.browseOpen);
+if (typeof lastPrefs.editorOpen === 'boolean') editorDrawer.classList.toggle('open', lastPrefs.editorOpen);
+if (lastPrefs.activeTab === 'raw') activeTab = 'raw';
+updateLayoutClasses();
+updateDirtyUi();
 loadOverrides();
 bindTopFields();
 resizeCanvas();
