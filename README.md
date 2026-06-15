@@ -6,6 +6,14 @@ visual editing of bounding boxes for Ideogram-style structured JSON captions
 
 ## What it does
 
+The screen is built to **maximize image space**: a slim top bar, a one-line
+canvas toolbar, and the image(s) filling everything below. The item list (with
+folder + compare setup, filters, and search) lives in a collapsible **Browse**
+panel on the left, and the rating + caption editor lives in a collapsible
+**Editor** panel on the right. Toggle either with its button in the top bar (or
+close with `Esc`); use ←/→ in the bar — or `[` / `]` — to move between items
+with both panels shut and the image full-bleed.
+
 **Review** (the original workflow): open a folder of images and matching
 `.txt` captions, rate each (`excellent` … `terrible`, `fixed`), filter and
 sort by status. Review state lives in a sidecar `.caption_review_state.json`,
@@ -35,12 +43,12 @@ on load using the same algorithm as the training pipeline. The first save of
 any caption stores the untouched original under `.caption_backups/`, and
 Ctrl+Z / Ctrl+Shift+Z undo and redo structured edits.
 
-**Compare against a second folder** (new): open a primary folder, then paste a
-second folder path into the **Compare** bar to line the two up side by side —
-useful for diffing an old caption pass against a new one, or an upscaled image
-set against the originals. The two folders do **not** have to use the same
-filenames. Each primary image is matched to its counterpart with a three-step
-cascade, stopping at the first hit:
+**Compare against a second folder** (new): in the **Browse** panel, point the
+compare field at a second folder to line the two up **side by side**, each in
+its own large canvas — useful for diffing an old caption pass against a new
+one, or an upscaled image set against the originals. The two folders do **not**
+have to use the same filenames. Each primary image is matched to its
+counterpart with a three-step cascade, stopping at the first hit:
 
 1. **Same name** — same filename stem (`cat.png` ↔ `cat.txt`/`cat.jpg`).
 2. **Same bytes** — identical file content, so pure renames still line up
@@ -51,13 +59,14 @@ cascade, stopping at the first hit:
    is; anything still unmatched is reported as "only here" / "only in B" so
    nothing is silently dropped.
 
-The second folder is shown **read-only**: its image (with boxes drawn) and its
-caption sit next to the primary editor for reference. Two actions bridge the
-two sides — **Copy B → A** drops the second folder's caption into the editor as
-unsaved changes (review before saving), and a **manual match** picker lets you
-override the automatic pairing for any image, in case the look-alike step
-guesses wrong on near-duplicate frames. Match overrides are remembered per
-compare-folder in the browser.
+The second image (B) is shown **read-only** beside the editable one (A); both
+support pan, zoom, and fit, and hovering any box on either side pops that
+object's full caption. Two actions bridge the sides — **Copy B → A** drops the
+second folder's caption into the editor as unsaved changes (review before
+saving), and a **Pick…** match picker lets you override the automatic pairing
+for any image, in case the look-alike step guesses wrong on near-duplicate
+frames. B's full caption text sits in the Editor panel, and match overrides are
+remembered per compare-folder in the browser.
 
 The "same picture" step needs **Pillow** (`pip install pillow`); without it the
 first two steps still work and the tool says so rather than failing.
@@ -104,7 +113,7 @@ keys in your captions are preserved untouched.
 ## Keyboard shortcuts
 
 `1`–`6` rate · `[` / `]` previous / next · `Ctrl+S` save ·
-`V` select mode · `B` draw mode · `Esc` cancel / deselect ·
+`V` select mode · `B` draw mode · `Esc` close panel / cancel / deselect ·
 arrows nudge box (Shift = ×10) · `Delete` remove selected element ·
 scroll zoom · Space-drag / middle-drag pan · `F` fit ·
 `Ctrl+Z` / `Ctrl+Shift+Z` undo / redo.
@@ -116,8 +125,8 @@ uv sync
 uv run python app.py
 ```
 
-Open `http://localhost:5062/`, paste your dataset folder path, hit
-**Open folder**.
+Open `http://localhost:5062/`. The **Browse** panel is open by default — put
+your dataset folder path in it and hit **Open folder**.
 
 (Plain pip works too: `pip install flask pillow`, then `python app.py`.
 Pillow is only needed for the "same picture" step of compare mode; everything

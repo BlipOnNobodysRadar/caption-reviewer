@@ -8,258 +8,287 @@
 </head>
 <body>
   <div class="app">
-    <header class="topbar">
-      <div>
-        <h1>Caption Reviewer + BBox Editor</h1>
-        <p>Rate captions, edit them as structured fields, and draw, move, and resize bounding boxes directly on the image.</p>
+    <!-- ================= slim app bar ================= -->
+    <header class="appbar">
+      <div class="appbar-left">
+        <button id="browseToggle" class="bar-btn" title="Show / hide the items + folders panel">&#9776; Browse</button>
       </div>
-      <div class="folder-controls">
-        <input id="targetFolder" placeholder="/path/to/image_caption_folder">
-        <label class="inline"><input type="checkbox" id="recursive"> recursive</label>
-        <label class="inline" title="First save of each caption stores the untouched original under .caption_backups/">
-          <input type="checkbox" id="backupOriginals" checked> backup originals
-        </label>
-        <button id="openFolder">Open folder</button>
+      <div class="appbar-center">
+        <button id="prevItem" class="bar-btn icon" title="Previous item ( [ )">&#8592;</button>
+        <div id="activeName" class="active-name">No item loaded</div>
+        <button id="nextItem" class="bar-btn icon" title="Next item ( ] )">&#8594;</button>
+      </div>
+      <div class="appbar-right">
+        <span id="saveStatus" class="bar-status"></span>
+        <button id="editorToggle" class="bar-btn" title="Show / hide the caption + rating editor">Editor &#9776;</button>
       </div>
     </header>
 
-    <section class="controls">
-      <div class="row">
-        <label>Status filter</label>
-        <select id="statusFilter">
-          <option value="all">All</option>
-          <option value="unrated">Unrated</option>
-          <option value="excellent">Excellent</option>
-          <option value="good_enough">Good enough</option>
-          <option value="needs_work">Needs work</option>
-          <option value="bad">Bad</option>
-          <option value="terrible">Terrible</option>
-          <option value="fixed">Fixed</option>
-        </select>
+    <!-- ================= slim canvas tool strip ================= -->
+    <section class="toolstrip">
+      <div class="tool-group">
+        <button id="modeSelectBtn" class="active" title="Select / move / resize boxes (V)">Select</button>
+        <button id="modeDrawBtn" title="Draw new boxes; stays active until Esc (B)">Draw</button>
+        <button id="addElementBtn" title="Add a new element, then draw its box">+ Element</button>
       </div>
-      <div class="row">
-        <label>Sort</label>
-        <select id="sortBy">
-          <option value="status">Status groups</option>
-          <option value="filename">Filename</option>
-          <option value="modified">Recently modified</option>
-        </select>
+      <div class="tool-group">
+        <button id="zoomOutBtn" title="Zoom out">&#8722;</button>
+        <span id="zoomLabel" class="zoom-label">100%</span>
+        <button id="zoomInBtn" title="Zoom in">+</button>
+        <button id="fitBtn" title="Fit image to view (F)">Fit</button>
       </div>
-      <div class="row">
-        <label>Search</label>
-        <input id="searchBox" placeholder="filename or caption text">
+      <div class="tool-group toggles">
+        <label><input type="checkbox" id="showBboxes" checked> boxes</label>
+        <label><input type="checkbox" id="bboxLabels" checked> labels</label>
+        <label><input type="checkbox" id="bboxFill"> fill</label>
+        <label><input type="checkbox" id="focusMode"> dim others</label>
       </div>
-      <div id="counts" class="counts">No folder loaded.</div>
-    </section>
-
-    <section class="compare-bar">
-      <div class="cmp-row">
-        <input id="compareFolder" placeholder="/path/to/second_folder  (compare against the folder above)">
-        <label class="inline"><input type="checkbox" id="compareRecursive"> recursive</label>
-        <label class="inline" title="Looseness for matching renamed/resized images by content. 0 = pixel-identical only; higher tolerates more re-encoding. Only used when filenames and exact bytes don't already match.">
-          match dist <input id="compareMaxDist" type="number" value="12" min="0" max="64">
-        </label>
-        <button id="loadCompare">Load compare folder</button>
-        <button id="clearCompare" class="hidden">Clear</button>
-      </div>
-      <div class="cmp-row2">
-        <label class="inline">show
-          <select id="compareFilter">
-            <option value="all">all items</option>
-            <option value="matched">only items matched in B</option>
-            <option value="unmatched">only items missing from B</option>
+      <div class="tool-group">
+        <label>format
+          <select id="bboxFormat" title="How stored bbox arrays are interpreted, for display and editing">
+            <option value="yxyx" selected>[y1, x1, y2, x2]</option>
+            <option value="xyxy">[x1, y1, x2, y2]</option>
           </select>
         </label>
-        <span id="compareSummary" class="muted">No compare folder loaded.</span>
+        <label>max <input id="bboxCoordMax" type="number" value="1000" min="1" title="Coordinate range maximum"></label>
       </div>
+      <span id="coordReadout" class="coord-readout" title="Cursor position in caption coordinates"></span>
+      <button id="issuesChip" class="issues-chip hidden" title="Click to fix all fixable boxes"></button>
     </section>
 
-    <main class="workspace">
-      <aside class="list-pane">
-        <div class="list-head">
-          <strong id="listTitle">Items</strong>
-          <span id="listCount">0</span>
-        </div>
-        <div id="itemList" class="item-list"></div>
-      </aside>
+    <!-- ================= the stage: canvas(es) ================= -->
+    <main class="stage">
+      <div id="emptyState" class="empty-state">
+        Open the <strong>Browse</strong> panel (top-left) and point it at a folder of
+        images with matching <code>.txt</code> caption files to begin.
+      </div>
 
-      <section class="review-pane">
-        <div id="emptyState" class="empty-state">
-          Open a folder containing images and matching <code>.txt</code> caption files.
-        </div>
-
-        <div id="reviewView" class="review-view hidden">
-          <div class="media-card">
-            <div class="media-toolbar">
-              <button id="prevItem" title="Previous item ( [ )">&#8592; Prev</button>
-              <div id="activeName" class="active-name"></div>
-              <button id="nextItem" title="Next item ( ] )">Next &#8594;</button>
-            </div>
-
-            <div class="canvas-toolbar">
-              <div class="tool-group">
-                <button id="modeSelectBtn" class="active" title="Select / move / resize boxes (V)">Select</button>
-                <button id="modeDrawBtn" title="Draw new boxes; stays active until Esc (B)">Draw</button>
-                <button id="addElementBtn" title="Add a new element, then draw its box">+ Element</button>
-              </div>
-              <div class="tool-group">
-                <button id="zoomOutBtn" title="Zoom out">&#8722;</button>
-                <span id="zoomLabel" class="zoom-label">100%</span>
-                <button id="zoomInBtn" title="Zoom in">+</button>
-                <button id="fitBtn" title="Fit image to view (F)">Fit</button>
-              </div>
-              <div class="tool-group toggles">
-                <label><input type="checkbox" id="showBboxes" checked> boxes</label>
-                <label><input type="checkbox" id="bboxLabels" checked> labels</label>
-                <label><input type="checkbox" id="bboxFill"> fill</label>
-                <label><input type="checkbox" id="focusMode"> dim others</label>
-              </div>
-              <div class="tool-group">
-                <label>format
-                  <select id="bboxFormat" title="How stored bbox arrays are interpreted, for display and editing">
-                    <option value="yxyx" selected>[y1, x1, y2, x2]</option>
-                    <option value="xyxy">[x1, y1, x2, y2]</option>
-                  </select>
-                </label>
-                <label>max <input id="bboxCoordMax" type="number" value="1000" min="1" title="Coordinate range maximum"></label>
-              </div>
-              <span id="coordReadout" class="coord-readout" title="Cursor position in caption coordinates"></span>
-              <button id="issuesChip" class="issues-chip hidden" title="Click to fix all fixable boxes"></button>
-            </div>
-
-            <div class="image-wrap" id="imageWrap">
-              <canvas id="imageCanvas"></canvas>
-            </div>
+      <div id="reviewView" class="review-view hidden">
+        <!-- A: the editable image -->
+        <section id="aCol" class="canvas-col">
+          <div class="col-head">
+            <span class="side-tag tag-a">A</span>
+            <span class="col-name">editing</span>
           </div>
-
-          <div class="editor-card">
-            <div class="rating-row" id="ratingButtons">
-              <button data-status="excellent">1 Excellent</button>
-              <button data-status="good_enough">2 Good enough</button>
-              <button data-status="needs_work">3 Needs work</button>
-              <button data-status="bad">4 Bad</button>
-              <button data-status="terrible">5 Terrible</button>
-              <button data-status="fixed">6 Fixed</button>
-              <button id="clearStatus">Clear</button>
-            </div>
-
-            <div class="tabs">
-              <button id="tabFieldsBtn" class="tab active">Fields</button>
-              <button id="tabRawBtn" class="tab">Raw JSON</button>
-            </div>
-
-            <div id="fieldsPanel" class="fields-panel">
-              <div id="fieldsNotice" class="notice hidden">
-                <span id="fieldsNoticeText"></span>
-                <button id="convertBtn" class="hidden">Convert to structured caption</button>
-              </div>
-
-              <label class="fld">High-level description
-                <textarea id="fld_hld" rows="3" spellcheck="false"></textarea>
-              </label>
-
-              <div class="fld-grid">
-                <label class="fld">Aesthetics
-                  <textarea id="fld_aesthetics" rows="2" spellcheck="false"></textarea>
-                </label>
-                <label class="fld">Lighting
-                  <textarea id="fld_lighting" rows="2" spellcheck="false"></textarea>
-                </label>
-                <label class="fld">Art style
-                  <textarea id="fld_art" rows="2" spellcheck="false"></textarea>
-                </label>
-                <label class="fld">Medium
-                  <input id="fld_medium" spellcheck="false">
-                </label>
-              </div>
-
-              <label class="fld">Style palette
-                <input id="fld_stylePalette" placeholder="#D4AF37, #FFFFFF" spellcheck="false">
-              </label>
-
-              <label class="fld">Background
-                <textarea id="fld_background" rows="2" spellcheck="false"></textarea>
-              </label>
-
-              <div class="elements-head">
-                <strong>Elements</strong>
-                <span id="elementsCount" class="muted">0</span>
-                <span class="muted hint">click a card or a box to select; Draw box binds the next drag</span>
-              </div>
-              <div id="elementsList" class="elements-list"></div>
-            </div>
-
-            <div id="rawPanel" class="raw-panel hidden">
-              <div class="caption-head">
-                <strong>Caption file</strong>
-                <span id="captionPath"></span>
-              </div>
-              <textarea id="captionText" spellcheck="false"></textarea>
-              <div class="raw-actions">
-                <button id="rawApplyBtn">Apply JSON to fields</button>
-                <span id="rawStatus" class="raw-status"></span>
-              </div>
-            </div>
-
-            <div class="actions">
-              <label class="inline">save as
-                <select id="saveFormat">
-                  <option value="pretty" selected>pretty JSON</option>
-                  <option value="minified">minified</option>
-                </select>
-              </label>
-              <button id="saveCaption">Save caption</button>
-              <button id="saveFixed" class="primary">Save + mark fixed</button>
-              <span id="saveStatus"></span>
-            </div>
-
-            <details class="help">
-              <summary>Keyboard shortcuts</summary>
-              <p>
-                <kbd>1</kbd>&#8211;<kbd>6</kbd> rate &middot; <kbd>[</kbd> / <kbd>]</kbd> prev / next &middot;
-                <kbd>Ctrl</kbd>+<kbd>S</kbd> save &middot;
-                <kbd>V</kbd> select &middot; <kbd>B</kbd> draw &middot; <kbd>Esc</kbd> cancel / deselect &middot;
-                arrows nudge selected box (<kbd>Shift</kbd> = &times;10) &middot;
-                <kbd>Delete</kbd> remove selected element &middot;
-                scroll zoom &middot; <kbd>Space</kbd>-drag or middle-drag pan &middot; double-click or <kbd>F</kbd> fit &middot;
-                <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> undo / redo.
-              </p>
-            </details>
+          <div class="image-wrap" id="imageWrap">
+            <canvas id="imageCanvas"></canvas>
           </div>
+        </section>
 
-          <section id="comparePane" class="compare-pane hidden">
-            <div class="compare-media">
-              <div class="cmp-head">
-                <strong>Compare image (B)</strong>
-                <span id="cmpMatchInfo" class="muted"></span>
-                <span class="spacer"></span>
-                <button id="bFitBtn" class="mini" title="Fit B image to view">Fit</button>
-              </div>
-              <div class="image-wrap" id="bImageWrap">
-                <canvas id="bCanvas"></canvas>
-              </div>
-            </div>
-            <div class="compare-caption">
-              <div class="cmp-head">
-                <strong>Compare caption (B)</strong>
-                <span id="bCaptionPath" class="muted"></span>
-                <span class="spacer"></span>
-                <button id="bPickToggle" class="mini" title="Manually choose which B image this pairs with">Pick match&#8230;</button>
-                <button id="copyBtoA" class="mini" title="Load B's caption into the A editor as unsaved changes" disabled>Copy B &#8594; A editor</button>
-              </div>
+        <!-- B: the read-only compare image (shown only in compare mode) -->
+        <section id="bCol" class="canvas-col hidden">
+          <div class="col-head">
+            <span class="side-tag tag-b">B</span>
+            <span id="cmpMatchInfo" class="col-name muted">compare image</span>
+            <span class="spacer"></span>
+            <button id="bFitBtn" class="mini" title="Fit B image to view">Fit</button>
+            <div class="pick-wrap">
+              <button id="bPickToggle" class="mini" title="Manually choose which B image this pairs with">Pick&#8230;</button>
               <div id="bPickWrap" class="b-pick hidden">
                 <input id="bPickSearch" placeholder="search B by filename">
                 <div id="bPickList" class="b-pick-list"></div>
                 <button id="bPickClear" class="mini hidden">Clear manual match for this item</button>
               </div>
-              <div id="bCaptionEmpty" class="muted cmp-empty">No matching image in the compare folder.</div>
-              <textarea id="bCaptionText" class="b-caption-text hidden" readonly spellcheck="false"></textarea>
             </div>
-          </section>
-        </div>
-      </section>
+            <button id="copyBtoA" class="mini" title="Load B's caption into the A editor as unsaved changes" disabled>Copy B &#8594; A</button>
+          </div>
+          <div class="image-wrap" id="bImageWrap">
+            <canvas id="bCanvas"></canvas>
+          </div>
+        </section>
+      </div>
     </main>
   </div>
+
+  <!-- ================= left drawer: browse / setup ================= -->
+  <aside id="browseDrawer" class="drawer left open">
+    <div class="drawer-head">
+      <strong>Browse</strong>
+      <button id="browseClose" class="bar-btn icon" title="Close panel">&times;</button>
+    </div>
+    <div class="drawer-body">
+      <details class="setup" open>
+        <summary>Folder</summary>
+        <div class="setup-body">
+          <input id="targetFolder" placeholder="/path/to/image_caption_folder">
+          <label class="inline"><input type="checkbox" id="recursive"> recursive</label>
+          <label class="inline" title="First save of each caption stores the untouched original under .caption_backups/">
+            <input type="checkbox" id="backupOriginals" checked> backup originals
+          </label>
+          <button id="openFolder" class="primary">Open folder</button>
+          <div id="counts" class="counts">No folder loaded.</div>
+        </div>
+      </details>
+
+      <details class="setup">
+        <summary>Compare against a second folder</summary>
+        <div class="setup-body">
+          <input id="compareFolder" placeholder="/path/to/second_folder">
+          <label class="inline"><input type="checkbox" id="compareRecursive"> recursive</label>
+          <label class="inline" title="Looseness for matching renamed/resized images by content. 0 = pixel-identical only; higher tolerates more re-encoding. Only used when filenames and exact bytes don't already match.">
+            match dist <input id="compareMaxDist" type="number" value="12" min="0" max="64">
+          </label>
+          <div class="setup-row">
+            <button id="loadCompare">Load compare folder</button>
+            <button id="clearCompare" class="hidden">Clear</button>
+          </div>
+          <label class="inline">show
+            <select id="compareFilter">
+              <option value="all">all items</option>
+              <option value="matched">only items matched in B</option>
+              <option value="unmatched">only items missing from B</option>
+            </select>
+          </label>
+          <div id="compareSummary" class="muted">No compare folder loaded.</div>
+        </div>
+      </details>
+
+      <div class="list-filters">
+        <label class="fld">Status filter
+          <select id="statusFilter">
+            <option value="all">All</option>
+            <option value="unrated">Unrated</option>
+            <option value="excellent">Excellent</option>
+            <option value="good_enough">Good enough</option>
+            <option value="needs_work">Needs work</option>
+            <option value="bad">Bad</option>
+            <option value="terrible">Terrible</option>
+            <option value="fixed">Fixed</option>
+          </select>
+        </label>
+        <label class="fld">Sort
+          <select id="sortBy">
+            <option value="status">Status groups</option>
+            <option value="filename">Filename</option>
+            <option value="modified">Recently modified</option>
+          </select>
+        </label>
+        <label class="fld">Search
+          <input id="searchBox" placeholder="filename or caption text">
+        </label>
+      </div>
+
+      <div class="list-head">
+        <strong id="listTitle">Items</strong>
+        <span id="listCount">0</span>
+      </div>
+      <div id="itemList" class="item-list"></div>
+    </div>
+  </aside>
+
+  <!-- ================= right drawer: editor ================= -->
+  <aside id="editorDrawer" class="drawer right">
+    <div class="drawer-head">
+      <strong>Editor</strong>
+      <button id="editorClose" class="bar-btn icon" title="Close panel">&times;</button>
+    </div>
+    <div class="drawer-body">
+      <div class="rating-row" id="ratingButtons">
+        <button data-status="excellent">1 Excellent</button>
+        <button data-status="good_enough">2 Good enough</button>
+        <button data-status="needs_work">3 Needs work</button>
+        <button data-status="bad">4 Bad</button>
+        <button data-status="terrible">5 Terrible</button>
+        <button data-status="fixed">6 Fixed</button>
+        <button id="clearStatus">Clear</button>
+      </div>
+
+      <div class="tabs">
+        <button id="tabFieldsBtn" class="tab active">Fields</button>
+        <button id="tabRawBtn" class="tab">Raw JSON</button>
+      </div>
+
+      <div id="fieldsPanel" class="fields-panel">
+        <div id="fieldsNotice" class="notice hidden">
+          <span id="fieldsNoticeText"></span>
+          <button id="convertBtn" class="hidden">Convert to structured caption</button>
+        </div>
+
+        <label class="fld">High-level description
+          <textarea id="fld_hld" rows="3" spellcheck="false"></textarea>
+        </label>
+
+        <div class="fld-grid">
+          <label class="fld">Aesthetics
+            <textarea id="fld_aesthetics" rows="2" spellcheck="false"></textarea>
+          </label>
+          <label class="fld">Lighting
+            <textarea id="fld_lighting" rows="2" spellcheck="false"></textarea>
+          </label>
+          <label class="fld">Art style
+            <textarea id="fld_art" rows="2" spellcheck="false"></textarea>
+          </label>
+          <label class="fld">Medium
+            <input id="fld_medium" spellcheck="false">
+          </label>
+        </div>
+
+        <label class="fld">Style palette
+          <input id="fld_stylePalette" placeholder="#D4AF37, #FFFFFF" spellcheck="false">
+        </label>
+
+        <label class="fld">Background
+          <textarea id="fld_background" rows="2" spellcheck="false"></textarea>
+        </label>
+
+        <div class="elements-head">
+          <strong>Elements</strong>
+          <span id="elementsCount" class="muted">0</span>
+          <span class="muted hint">click a card or a box to select; Draw box binds the next drag</span>
+        </div>
+        <div id="elementsList" class="elements-list"></div>
+      </div>
+
+      <div id="rawPanel" class="raw-panel hidden">
+        <div class="caption-head">
+          <strong>Caption file</strong>
+          <span id="captionPath"></span>
+        </div>
+        <textarea id="captionText" spellcheck="false"></textarea>
+        <div class="raw-actions">
+          <button id="rawApplyBtn">Apply JSON to fields</button>
+          <span id="rawStatus" class="raw-status"></span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <label class="inline">save as
+          <select id="saveFormat">
+            <option value="pretty" selected>pretty JSON</option>
+            <option value="minified">minified</option>
+          </select>
+        </label>
+        <button id="saveCaption">Save caption</button>
+        <button id="saveFixed" class="primary">Save + mark fixed</button>
+      </div>
+
+      <!-- B reference caption (shown only in compare mode) -->
+      <section id="comparePane" class="b-ref hidden">
+        <div class="b-ref-head">
+          <strong>Compare caption (B)</strong>
+          <span id="bCaptionPath" class="muted"></span>
+        </div>
+        <div id="bCaptionEmpty" class="muted cmp-empty">No matching image in the compare folder.</div>
+        <textarea id="bCaptionText" class="b-caption-text hidden" readonly spellcheck="false"></textarea>
+      </section>
+
+      <details class="help">
+        <summary>Keyboard shortcuts</summary>
+        <p>
+          <kbd>1</kbd>&#8211;<kbd>6</kbd> rate &middot; <kbd>[</kbd> / <kbd>]</kbd> prev / next &middot;
+          <kbd>Ctrl</kbd>+<kbd>S</kbd> save &middot;
+          <kbd>V</kbd> select &middot; <kbd>B</kbd> draw &middot; <kbd>Esc</kbd> cancel / deselect / close panel &middot;
+          arrows nudge selected box (<kbd>Shift</kbd> = &times;10) &middot;
+          <kbd>Delete</kbd> remove selected element &middot;
+          scroll zoom &middot; <kbd>Space</kbd>-drag or middle-drag pan &middot; double-click or <kbd>F</kbd> fit &middot;
+          <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> undo / redo.
+        </p>
+      </details>
+    </div>
+  </aside>
+
+  <!-- floating per-box caption tooltip -->
+  <div id="boxTip" class="box-tip hidden"></div>
 
   <script src="/static/bbox_core.js"></script>
   <script src="/static/script.js"></script>

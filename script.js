@@ -31,6 +31,11 @@ const captionText = $('captionText'), captionPath = $('captionPath');
 const rawApplyBtn = $('rawApplyBtn'), rawStatus = $('rawStatus');
 const saveFormat = $('saveFormat'), saveCaptionBtn = $('saveCaption'), saveFixedBtn = $('saveFixed');
 const saveStatus = $('saveStatus');
+/* layout: app-bar toggles, slide-in drawers, floating hover tooltip */
+const browseToggle = $('browseToggle'), editorToggle = $('editorToggle');
+const browseClose = $('browseClose'), editorClose = $('editorClose');
+const browseDrawer = $('browseDrawer'), editorDrawer = $('editorDrawer');
+const bCol = $('bCol'), boxTip = $('boxTip');
 
 /* ---------------- state ---------------- */
 let items = [], activeRel = null, activeIndex = -1;
@@ -746,6 +751,7 @@ function getPos(e) {
 /* pointer interactions */
 imageCanvas.addEventListener('pointerdown', (e) => {
   if (!imgLoaded) return;
+  hideBoxTip();
   const p = getPos(e);
   imageCanvas.setPointerCapture(e.pointerId);
   if (e.button === 1 || spaceHeld) {
@@ -787,6 +793,8 @@ imageCanvas.addEventListener('pointermove', (e) => {
     if (newHover !== hoverIdx) { hoverIdx = newHover; draw(); }
     setCanvasCursor(p);
     updateReadout(p);
+    if (hoverIdx >= 0) showBoxTip(e.clientX, e.clientY, elements()[hoverIdx], hoverIdx);
+    else hideBoxTip();
     if (mode === 'draw') draw(); // crosshair follows
     return;
   }
@@ -885,7 +893,7 @@ imageCanvas.addEventListener('wheel', (e) => {
   draw(); updateReadout(p);
 }, { passive: false });
 imageCanvas.addEventListener('dblclick', () => { fitView(); draw(); });
-imageCanvas.addEventListener('pointerleave', () => { lastPointer = null; hoverIdx = -1; updateReadout(null); draw(); });
+imageCanvas.addEventListener('pointerleave', () => { lastPointer = null; hoverIdx = -1; updateReadout(null); hideBoxTip(); draw(); });
 
 function setMode(m) {
   mode = m;
@@ -1037,7 +1045,8 @@ document.addEventListener('keydown', (ev) => {
   else if (k === 'b' || k === 'B') { drawSticky = true; setMode('draw'); }
   else if (k === 'f' || k === 'F') { fitView(); draw(); }
   else if (k === 'Escape') {
-    if (mode === 'draw') setMode('select');
+    if (anyDrawerOpen()) closeDrawers();
+    else if (mode === 'draw') setMode('select');
     else selectIdx(-1);
   } else if ((k === 'Delete' || k === 'Backspace') && selectedIdx >= 0) {
     ev.preventDefault();
@@ -1103,6 +1112,41 @@ window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault()
 const ro = new ResizeObserver(() => { resizeCanvas(); draw(); });
 ro.observe(imageWrap);
 
+/* ---------------- drawers (collapsible side panels) ---------------- */
+function setDrawer(el, open) { el.classList.toggle('open', open); }
+function toggleDrawer(el) { setDrawer(el, !el.classList.contains('open')); }
+function anyDrawerOpen() { return browseDrawer.classList.contains('open') || editorDrawer.classList.contains('open'); }
+function closeDrawers() { setDrawer(browseDrawer, false); setDrawer(editorDrawer, false); }
+browseToggle.addEventListener('click', () => toggleDrawer(browseDrawer));
+editorToggle.addEventListener('click', () => toggleDrawer(editorDrawer));
+browseClose.addEventListener('click', () => setDrawer(browseDrawer, false));
+editorClose.addEventListener('click', () => setDrawer(editorDrawer, false));
+
+/* ---------------- floating per-box caption tooltip ---------------- *
+ * Shared by both canvases: hover a box to read that object's full caption
+ * without opening the editor. Positioned at the cursor, flips near edges.   */
+function descOf(el) { return el ? String(el.desc || el.description || '') : ''; }
+function showBoxTip(clientX, clientY, el, idx) {
+  if (!el) { hideBoxTip(); return; }
+  const type = el.type ? String(el.type) : 'box';
+  const desc = descOf(el);
+  const coords = Array.isArray(el.bbox) ? `[${el.bbox.join(', ')}]` : '';
+  boxTip.innerHTML =
+    `<div class="tip-label">${escapeText((idx + 1) + ' \u00b7 ' + type)}</div>` +
+    (desc ? `<div class="tip-desc">${escapeText(desc)}</div>` : '<div class="tip-desc muted">(no description)</div>') +
+    (coords ? `<div class="tip-coords">${escapeText(coords)}</div>` : '');
+  boxTip.style.borderLeftColor = C.colorForIndex(idx);
+  boxTip.classList.remove('hidden');
+  const pad = 14;
+  const tw = boxTip.offsetWidth, th = boxTip.offsetHeight;
+  let x = clientX + pad, y = clientY + pad;
+  if (x + tw + 6 > window.innerWidth) x = clientX - tw - pad;
+  if (y + th + 6 > window.innerHeight) y = clientY - th - pad;
+  boxTip.style.left = Math.max(6, x) + 'px';
+  boxTip.style.top = Math.max(6, y) + 'px';
+}
+function hideBoxTip() { boxTip.classList.add('hidden'); }
+
 /* ===================== compare mode (second folder) ===================== *
  * The A side above stays the full editor. This adds a read-only B side that
  * shows the matched image (with its boxes drawn) and caption from a second
@@ -1128,6 +1172,7 @@ let bText = '', bDoc = null;
 let bImg = new Image(), bImgLoaded = false;
 let bView = { scale: 1, ox: 0, oy: 0 };
 let bDrag = null;
+let bHoverIdx = -1;
 
 /* manual overrides persist locally, keyed by compare-folder path */
 function loadOverrides() {
@@ -1148,15 +1193,25 @@ function setOverride(aRel, bRel) {
   saveOverrides();
 }
 
+/* Switch the stage between single-canvas (A) and side-by-side (A | B).
+ * A's column changes width when B appears/disappears, so refit A once here
+ * rather than on every B item load. */
+function applyCompareLayout(on) {
+  bCol.classList.toggle('hidden', !on);
+  comparePane.classList.toggle('hidden', !on);   // B caption block in the editor drawer
+  reviewView.classList.toggle('comparing', on);
+  resizeCanvas(); fitView(); draw();
+  if (on) bResize();
+}
+
 function resetCompareForNewFolder() {
   compareActive = false;
   matchMap = {}; bImages = []; compareRoot = '';
-  comparePane.classList.add('hidden');
-  reviewView.classList.remove('compare-on');
+  applyCompareLayout(false);
   clearCompareBtn.classList.add('hidden');
   bPickWrap.classList.add('hidden');
   compareSummary.textContent = 'No compare folder loaded.';
-  bText = ''; bDoc = null; bImgLoaded = false;
+  bText = ''; bDoc = null; bImgLoaded = false; bHoverIdx = -1;
 }
 
 async function loadCompareFolder() {
@@ -1181,6 +1236,7 @@ async function loadCompareFolder() {
     matchMap = out.matches || {};
     bImages = out.b_images || [];
     clearCompareBtn.classList.remove('hidden');
+    applyCompareLayout(true);
     renderCompareSummary(out.summary, out.have_pil, out.max_distance);
     renderList();
     if (activeRel) await loadCompareItem(activeRel);
@@ -1215,8 +1271,9 @@ async function clearCompare() {
 }
 
 function showComparePane() {
+  if (!compareActive) return;
+  bCol.classList.remove('hidden');
   comparePane.classList.remove('hidden');
-  reviewView.classList.add('compare-on');
   bResize();
 }
 
@@ -1317,8 +1374,9 @@ function bDraw() {
     const x = bView.ox + rect.left * bView.scale, y = bView.oy + rect.top * bView.scale;
     const w = rect.width * bView.scale, h = rect.height * bView.scale;
     const color = C.colorForIndex(i);
-    if (bboxFill.checked) { bctx.fillStyle = color + '1d'; bctx.fillRect(x, y, w, h); }
-    bctx.lineWidth = 2;
+    const hov = i === bHoverIdx;
+    if (bboxFill.checked || hov) { bctx.fillStyle = color + (hov ? '2e' : '1d'); bctx.fillRect(x, y, w, h); }
+    bctx.lineWidth = hov ? 3 : 2;
     bctx.strokeStyle = color;
     bctx.strokeRect(x, y, w, h);
     if (bboxLabels.checked) {
@@ -1332,6 +1390,28 @@ function bDraw() {
       bctx.fillText(text, lx + 5, ly + 3);
     }
   }
+}
+/* hover hit-test for the read-only B canvas (smallest box under the cursor) */
+function bGetPos(e) {
+  const r = bCanvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function bHitBox(p) {
+  if (!showBboxes.checked || !bImgLoaded) return -1;
+  const ix = (p.x - bView.ox) / bView.scale, iy = (p.y - bView.oy) / bView.scale;
+  const tol = 5 / bView.scale;
+  let best = -1, bestArea = Infinity;
+  const arr = bElements();
+  for (let i = 0; i < arr.length; i++) {
+    const r = C.bboxToRect(arr[i].bbox, order(), coordMax(), bImg.naturalWidth, bImg.naturalHeight);
+    if (!r) continue;
+    if (ix >= r.left - tol && ix <= r.left + r.width + tol &&
+        iy >= r.top - tol && iy <= r.top + r.height + tol) {
+      const area = r.width * r.height;
+      if (area < bestArea) { bestArea = area; best = i; }
+    }
+  }
+  return best;
 }
 bCanvas.addEventListener('wheel', (e) => {
   if (!bImgLoaded) return;
@@ -1347,17 +1427,26 @@ bCanvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 bCanvas.addEventListener('pointerdown', (e) => {
   if (!bImgLoaded) return;
+  hideBoxTip();
   bCanvas.setPointerCapture(e.pointerId);
   bDrag = { x: e.clientX, y: e.clientY, ox: bView.ox, oy: bView.oy };
   bCanvas.style.cursor = 'grabbing';
 });
 bCanvas.addEventListener('pointermove', (e) => {
-  if (!bDrag) return;
-  bView.ox = bDrag.ox + (e.clientX - bDrag.x);
-  bView.oy = bDrag.oy + (e.clientY - bDrag.y);
-  bDraw();
+  if (bDrag) {
+    bView.ox = bDrag.ox + (e.clientX - bDrag.x);
+    bView.oy = bDrag.oy + (e.clientY - bDrag.y);
+    hideBoxTip();
+    bDraw();
+    return;
+  }
+  const h = bHitBox(bGetPos(e));
+  if (h !== bHoverIdx) { bHoverIdx = h; bDraw(); }
+  if (h >= 0) { bCanvas.style.cursor = 'help'; showBoxTip(e.clientX, e.clientY, bElements()[h], h); }
+  else { bCanvas.style.cursor = 'grab'; hideBoxTip(); }
 });
-bCanvas.addEventListener('pointerup', () => { bDrag = null; bCanvas.style.cursor = 'grab'; });
+bCanvas.addEventListener('pointerup', () => { bDrag = null; bCanvas.style.cursor = bHoverIdx >= 0 ? 'help' : 'grab'; });
+bCanvas.addEventListener('pointerleave', () => { bHoverIdx = -1; hideBoxTip(); bDraw(); });
 bCanvas.addEventListener('dblclick', () => { bFit(); bDraw(); });
 bCanvas.style.cursor = 'grab';
 
