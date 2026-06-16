@@ -209,6 +209,7 @@
         <summary>Experimental AI Edit</summary>
         <div class="ai-edit-body">
           <p class="muted">Ask a running local llama.cpp-compatible loaded local vision model to edit the current caption. Images are sent only to the configured backend URL.</p>
+          <p class="ai-mode-hint">Targeted edit operations are enabled by default, so the model can return only bbox/element changes instead of a full recaption.</p>
           <label class="fld">Edit request
             <textarea id="aiEditRequest" rows="3" placeholder="Add bboxes for Ashe's hood and hands." spellcheck="false"></textarea>
           </label>
@@ -245,6 +246,12 @@
               <label class="fld">Base URL <input id="aiBaseUrl" value="http://localhost:8080" spellcheck="false"></label>
               <label class="fld">Endpoint path <input id="aiEndpointPath" value="/v1/chat/completions" spellcheck="false"></label>
               <label class="fld">Model <input id="aiModel" value="local-model" spellcheck="false"></label>
+              <label class="fld">Response format
+                <select id="aiResponseMode">
+                  <option value="ops" selected>targeted edit operations (recommended)</option>
+                  <option value="full">full caption JSON fallback</option>
+                </select>
+              </label>
               <div class="fld-grid three">
                 <label class="fld">Max tokens <input id="aiMaxTokens" type="number" value="8192" min="1"></label>
                 <label class="fld">Temperature <input id="aiTemperature" type="number" value="0.1" min="0" max="2" step="0.05"></label>

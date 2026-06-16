@@ -1199,10 +1199,11 @@ You will receive:
 3. The current caption JSON.
 4. A user edit request.
 
-Prefer returning a small edit operation object instead of rewriting the whole caption.
+{response_format_instructions}
+
 Return raw JSON only, with no markdown, comments, explanation, or backticks.
 
-Preferred response format:
+Preferred targeted-operations response format:
 {
   "caption_edits": [
     { "op": "update_element", "index": 0, "fields": { "bbox": [y_min, x_min, y_max, x_max], "desc": "updated description" } },
@@ -1277,7 +1278,7 @@ const aiReview = $('aiReview'), aiBeforeCanvas = $('aiBeforeCanvas'), aiAfterCan
 const aiSelectAllBtn = $('aiSelectAllBtn'), aiSelectNoneBtn = $('aiSelectNoneBtn');
 const aiOverlayModal = $('aiOverlayModal'), aiOverlayBeforeCanvas = $('aiOverlayBeforeCanvas'), aiOverlayAfterCanvas = $('aiOverlayAfterCanvas'), aiOverlayTitle = $('aiOverlayTitle');
 const aiOverlayZoomOut = $('aiOverlayZoomOut'), aiOverlayZoomIn = $('aiOverlayZoomIn'), aiOverlayFit = $('aiOverlayFit'), aiOverlayClose = $('aiOverlayClose'), aiOverlayZoomLabel = $('aiOverlayZoomLabel');
-const aiEnabled = $('aiEnabled'), aiBaseUrl = $('aiBaseUrl'), aiEndpointPath = $('aiEndpointPath'), aiModel = $('aiModel');
+const aiEnabled = $('aiEnabled'), aiBaseUrl = $('aiBaseUrl'), aiEndpointPath = $('aiEndpointPath'), aiModel = $('aiModel'), aiResponseMode = $('aiResponseMode');
 const aiMaxTokens = $('aiMaxTokens'), aiTemperature = $('aiTemperature'), aiTimeout = $('aiTimeout'), aiSendOriginal = $('aiSendOriginal');
 const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiOverlayMax = $('aiOverlayMax');
 const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiIncludePrettyJson'), aiIncludePromptTemplate = $('aiIncludePromptTemplate');
@@ -1316,7 +1317,7 @@ function saveAiPrefs() {
     maxTokens: aiMaxTokens.value, temperature: aiTemperature.value, timeout: aiTimeout.value,
     sendOriginal: aiSendOriginal.checked, sendOverlay: aiSendOverlay.checked, autoApply: aiAutoApply.checked,
     overlayMax: aiOverlayMax.value, includeRawJson: aiIncludeRawJson.checked, includePrettyJson: aiIncludePrettyJson.checked,
-    includePromptTemplate: aiIncludePromptTemplate.checked, promptTemplate: aiPromptTemplate.value
+    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value
   };
   lastPrefs = p;
   writePrefs();
@@ -1328,6 +1329,7 @@ function initAiPrefs() {
   if (p.baseUrl) aiBaseUrl.value = p.baseUrl;
   if (p.endpointPath) aiEndpointPath.value = p.endpointPath;
   if (p.model) aiModel.value = p.model;
+  if (p.responseMode) aiResponseMode.value = p.responseMode;
   if (p.maxTokens) aiMaxTokens.value = p.maxTokens;
   if (p.temperature) aiTemperature.value = p.temperature;
   if (p.timeout) aiTimeout.value = p.timeout;
@@ -1339,6 +1341,26 @@ function initAiPrefs() {
   if (typeof p.includePrettyJson === 'boolean') aiIncludePrettyJson.checked = p.includePrettyJson;
   if (typeof p.includePromptTemplate === 'boolean') aiIncludePromptTemplate.checked = p.includePromptTemplate;
   updateAiRemoteWarning();
+}
+function aiResponseFormatInstructions() {
+  if (aiResponseMode.value === 'full') {
+    return `IMPORTANT RESPONSE FORMAT OVERRIDE:
+Return one complete edited caption JSON object and nothing else.
+Preserve unrelated caption content exactly unless a requested edit requires changing it.`;
+  }
+  return `IMPORTANT RESPONSE FORMAT OVERRIDE:
+Prefer targeted edit operations instead of a full caption replacement.
+Return raw JSON like {"caption_edits":[...]} and include only operations needed for the user's request.
+Use update_element/add_element/remove_element/set_field operations.
+Do not include unchanged or unrelated elements in update_element operations.
+A full caption JSON object is accepted only as a fallback if operations are insufficient.`;
+}
+function aiPromptForRequest() {
+  const base = aiPromptTemplate.value || DEFAULT_AI_PROMPT_TEMPLATE;
+  const instructions = aiResponseFormatInstructions();
+  return base.includes('{response_format_instructions}')
+    ? base.replaceAll('{response_format_instructions}', instructions)
+    : instructions + '\n\n' + base;
 }
 function aiValidationIssues() {
   return doc ? C.validateDoc(doc, coordMax()).map((x) => `${x.label}: ${x.msg}`) : [];
@@ -1584,7 +1606,7 @@ async function askAiEdit() {
       body: JSON.stringify({
         image_path: activeRel, caption: doc, user_request: reqText, coordinate_format: order(), coordinate_max: coordMax(),
         selected_element_index: selectedIdx, validation_issues: aiValidationIssues(), settings: aiSettingsFromUi(),
-        prompt_template: aiPromptTemplate.value || DEFAULT_AI_PROMPT_TEMPLATE
+        prompt_template: aiPromptForRequest()
       })
     });
     const out = await res.json();
@@ -1593,7 +1615,8 @@ async function askAiEdit() {
     if (!out.ok) throw new Error(out.error || 'AI edit failed.');
     pendingAiCaption = out.caption;
     pendingAiBeforeCaption = before;
-    aiStatus.textContent = out.validation && out.validation.valid ? 'Received valid AI-edited caption.' : 'Received AI result.';
+    const modeLabel = out.debug && out.debug.response_mode ? ` (${out.debug.response_mode})` : '';
+    aiStatus.textContent = (out.validation && out.validation.valid ? 'Received valid AI-edited caption' : 'Received AI result') + modeLabel + '.';
     aiStatus.className = 'raw-status ok';
     aiDiff.textContent = summarizeAiDiff(before, pendingAiCaption);
     aiDiff.classList.remove('hidden');
@@ -1629,7 +1652,7 @@ for (const modalCanvas of [aiOverlayBeforeCanvas, aiOverlayAfterCanvas]) {
 }
 aiResetPromptBtn.addEventListener('click', () => { aiPromptTemplate.value = DEFAULT_AI_PROMPT_TEMPLATE; saveAiPrefs(); });
 window.addEventListener('resize', () => { if (!aiOverlayModal.classList.contains('hidden')) drawAiOverlayModal(); });
-for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate]) {
+for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate]) {
   el.addEventListener('change', () => { updateAiRemoteWarning(); saveAiPrefs(); });
   el.addEventListener('input', debounce(() => { updateAiRemoteWarning(); saveAiPrefs(); }, 300));
 }

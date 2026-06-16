@@ -488,3 +488,4 @@ body.dirty .active-name::after {
 .ai-change-detail { display: block; margin-top: 3px; }
 .ai-change-detail code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: #d7def5; }
 .ai-change-detail { white-space: pre-wrap; }
+.ai-mode-hint { margin: -3px 0 4px; padding: 7px 8px; border: 1px solid #24426e; border-radius: 8px; background: #0d1a2d; color: #a9c7ff; font-size: 12px; }
