@@ -220,6 +220,24 @@
           <div id="aiStatus" class="raw-status"></div>
           <div id="aiRemoteWarning" class="notice warn hidden">Warning: this backend URL is not localhost/127.0.0.1. Images will be sent to that configured address.</div>
           <div id="aiDiff" class="ai-diff hidden"></div>
+          <div id="aiReview" class="ai-review hidden">
+            <div class="ai-preview-grid">
+              <div class="ai-preview-card">
+                <strong>Before</strong>
+                <canvas id="aiBeforeCanvas"></canvas>
+              </div>
+              <div class="ai-preview-card">
+                <strong>After</strong>
+                <canvas id="aiAfterCanvas"></canvas>
+              </div>
+            </div>
+            <div class="ai-change-head">
+              <strong>Apply selected changes</strong>
+              <button id="aiSelectAllBtn" class="mini">Select all</button>
+              <button id="aiSelectNoneBtn" class="mini">Select none</button>
+            </div>
+            <div id="aiChangeList" class="ai-change-list"></div>
+          </div>
           <details class="setup">
             <summary>AI settings</summary>
             <div class="setup-body compact">

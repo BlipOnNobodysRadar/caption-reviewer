@@ -1254,12 +1254,15 @@ User edit request:
 
 const aiEditRequest = $('aiEditRequest'), aiAskBtn = $('aiAskBtn'), aiApplyBtn = $('aiApplyBtn'), aiDiscardBtn = $('aiDiscardBtn');
 const aiStatus = $('aiStatus'), aiRemoteWarning = $('aiRemoteWarning'), aiDiff = $('aiDiff'), aiRawWrap = $('aiRawWrap'), aiRawResponse = $('aiRawResponse');
+const aiReview = $('aiReview'), aiBeforeCanvas = $('aiBeforeCanvas'), aiAfterCanvas = $('aiAfterCanvas'), aiChangeList = $('aiChangeList');
+const aiSelectAllBtn = $('aiSelectAllBtn'), aiSelectNoneBtn = $('aiSelectNoneBtn');
 const aiEnabled = $('aiEnabled'), aiBaseUrl = $('aiBaseUrl'), aiEndpointPath = $('aiEndpointPath'), aiModel = $('aiModel');
 const aiMaxTokens = $('aiMaxTokens'), aiTemperature = $('aiTemperature'), aiTimeout = $('aiTimeout'), aiSendOriginal = $('aiSendOriginal');
 const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiOverlayMax = $('aiOverlayMax');
 const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiIncludePrettyJson'), aiIncludePromptTemplate = $('aiIncludePromptTemplate');
 const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn');
 let pendingAiCaption = null;
+let pendingAiBeforeCaption = null;
 
 function aiSettingsFromUi() {
   return {
@@ -1338,10 +1341,119 @@ function summarizeAiDiff(before, after) {
   }
   return lines.length ? lines.join('\n') : 'No obvious structural changes detected.';
 }
+function cloneJson(value) { return JSON.parse(JSON.stringify(value)); }
+function aiElementLabel(el, i) {
+  if (!el) return `element ${i + 1}`;
+  const desc = String(el.desc || el.description || el.text || '').trim().replace(/\s+/g, ' ').slice(0, 90);
+  return `#${i + 1} ${el.type || 'obj'}${desc ? ': ' + desc : ''}`;
+}
+function aiNonElementChanged(before, after) {
+  if (!before || !after) return false;
+  if (JSON.stringify(before.high_level_description) !== JSON.stringify(after.high_level_description)) return true;
+  if (JSON.stringify(before.style_description) !== JSON.stringify(after.style_description)) return true;
+  const bc = before.compositional_deconstruction || {}, ac = after.compositional_deconstruction || {};
+  const stripElements = (obj) => {
+    const copy = Object.assign({}, obj || {});
+    delete copy.elements;
+    return copy;
+  };
+  return JSON.stringify(stripElements(bc)) !== JSON.stringify(stripElements(ac));
+}
+function selectedAiChangeKeys() {
+  return new Set(Array.from(aiChangeList.querySelectorAll('input[data-change-key]:checked')).map((el) => el.dataset.changeKey));
+}
+function mergeSelectedAiCaption(before, after) {
+  if (!before || !after) return after;
+  const selected = selectedAiChangeKeys();
+  const merged = cloneJson(before);
+  if (selected.has('top')) {
+    if (Object.prototype.hasOwnProperty.call(after, 'high_level_description')) merged.high_level_description = cloneJson(after.high_level_description);
+    if (Object.prototype.hasOwnProperty.call(after, 'style_description')) merged.style_description = cloneJson(after.style_description);
+    if (after.compositional_deconstruction && typeof after.compositional_deconstruction === 'object') {
+      if (!merged.compositional_deconstruction || typeof merged.compositional_deconstruction !== 'object') merged.compositional_deconstruction = {};
+      for (const [k, v] of Object.entries(after.compositional_deconstruction)) {
+        if (k !== 'elements') merged.compositional_deconstruction[k] = cloneJson(v);
+      }
+    }
+  }
+  const bEls = C.getElements(before) || [];
+  const aEls = C.getElements(after) || [];
+  const outEls = [];
+  const n = Math.max(bEls.length, aEls.length);
+  for (let i = 0; i < n; i++) {
+    const b = bEls[i], a = aEls[i];
+    if (b && a) outEls.push(selected.has('el-change-' + i) ? cloneJson(a) : cloneJson(b));
+    else if (b && !a) { if (!selected.has('el-remove-' + i)) outEls.push(cloneJson(b)); }
+    else if (!b && a) { if (selected.has('el-add-' + i)) outEls.push(cloneJson(a)); }
+  }
+  C.getElements(merged, { create: true }).splice(0, C.getElements(merged, { create: true }).length, ...outEls);
+  return merged;
+}
+function drawAiPreview(canvas, caption) {
+  if (!canvas || !imgLoaded || !caption) return;
+  const cssW = Math.max(220, canvas.clientWidth || 300), cssH = Math.max(160, canvas.clientHeight || 180);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
+  const pctx = canvas.getContext('2d');
+  pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  pctx.clearRect(0, 0, cssW, cssH);
+  pctx.fillStyle = '#05070c'; pctx.fillRect(0, 0, cssW, cssH);
+  const margin = 8;
+  const scale = Math.min((cssW - margin * 2) / img.naturalWidth, (cssH - margin * 2) / img.naturalHeight);
+  const ox = (cssW - img.naturalWidth * scale) / 2, oy = (cssH - img.naturalHeight * scale) / 2;
+  pctx.drawImage(img, ox, oy, img.naturalWidth * scale, img.naturalHeight * scale);
+  const arr = (caption && C.getElements(caption)) || [];
+  pctx.textBaseline = 'top'; pctx.font = '700 11px system-ui';
+  for (let i = 0; i < arr.length; i++) {
+    const r = C.bboxToRect(arr[i].bbox, order(), coordMax(), img.naturalWidth, img.naturalHeight);
+    if (!r) continue;
+    const color = C.colorForIndex(i);
+    const x = ox + r.left * scale, y = oy + r.top * scale, w = r.width * scale, h = r.height * scale;
+    pctx.strokeStyle = color; pctx.lineWidth = 2; pctx.strokeRect(x, y, w, h);
+    const text = C.shortLabel(arr[i], i);
+    const tw = Math.min(cssW - x - 4, pctx.measureText(text).width + 8);
+    const ly = Math.max(0, y - 15);
+    pctx.fillStyle = color; pctx.fillRect(x, ly, Math.max(30, tw), 15);
+    pctx.fillStyle = '#0c0e14'; pctx.fillText(text, x + 4, ly + 2);
+  }
+}
+function renderAiChangeList(before, after) {
+  aiChangeList.innerHTML = '';
+  const addItem = (key, title, detail, checked = true) => {
+    const label = document.createElement('label');
+    label.className = 'ai-change-item';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = checked; cb.dataset.changeKey = key;
+    const body = document.createElement('span');
+    body.innerHTML = `${escapeText(title)}${detail ? `<span class="muted">${escapeText(detail)}</span>` : ''}`;
+    label.append(cb, body);
+    aiChangeList.appendChild(label);
+  };
+  if (aiNonElementChanged(before, after)) addItem('top', 'High-level/style/background fields changed', 'Apply non-element caption field changes.');
+  const b = (before && C.getElements(before)) || [], a = (after && C.getElements(after)) || [];
+  const n = Math.max(b.length, a.length);
+  for (let i = 0; i < n; i++) {
+    if (b[i] && a[i] && JSON.stringify(b[i]) !== JSON.stringify(a[i])) addItem('el-change-' + i, `Changed ${aiElementLabel(a[i], i)}`, `Before: ${aiElementLabel(b[i], i)} bbox=${JSON.stringify(b[i].bbox)} → after bbox=${JSON.stringify(a[i].bbox)}`);
+    else if (!b[i] && a[i]) addItem('el-add-' + i, `Added ${aiElementLabel(a[i], i)}`, `bbox=${JSON.stringify(a[i].bbox)}`);
+    else if (b[i] && !a[i]) addItem('el-remove-' + i, `Removed ${aiElementLabel(b[i], i)}`, `Original bbox=${JSON.stringify(b[i].bbox)}`);
+  }
+  if (!aiChangeList.children.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'No element-level differences detected.';
+    aiChangeList.appendChild(empty);
+  }
+}
+function renderAiReview(before, after) {
+  if (!before || !after) { aiReview.classList.add('hidden'); return; }
+  renderAiChangeList(before, after);
+  aiReview.classList.remove('hidden');
+  requestAnimationFrame(() => { drawAiPreview(aiBeforeCanvas, before); drawAiPreview(aiAfterCanvas, after); });
+}
 function applyAiCaption(caption) {
   if (!caption) return;
   pushUndoMaybe();
-  doc = JSON.parse(JSON.stringify(caption));
+  doc = cloneJson(caption);
   plain = false; parseError = null; parseRepaired = false; parseRepairKind = '';
   rawDirtyPending = false;
   markDirty();
@@ -1350,15 +1462,19 @@ function applyAiCaption(caption) {
   draw();
   setMessage('Applied AI result as an unsaved edit.');
 }
+function applySelectedAiChanges() {
+  if (!pendingAiCaption) return;
+  applyAiCaption(mergeSelectedAiCaption(pendingAiBeforeCaption, pendingAiCaption));
+}
 async function askAiEdit() {
   if (!aiEnabled.checked) { aiStatus.textContent = 'AI Edit is disabled.'; aiStatus.className = 'raw-status error'; return; }
   if (!activeRel || !doc) { aiStatus.textContent = 'Open a structured caption first.'; aiStatus.className = 'raw-status error'; return; }
   const reqText = aiEditRequest.value.trim();
   if (!reqText) { aiStatus.textContent = 'Enter an edit request.'; aiStatus.className = 'raw-status error'; return; }
-  updateAiRemoteWarning(); saveAiPrefs(); pendingAiCaption = null;
-  aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiRawWrap.classList.add('hidden');
+  updateAiRemoteWarning(); saveAiPrefs(); pendingAiCaption = null; pendingAiBeforeCaption = null;
+  aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiRawWrap.classList.add('hidden'); aiReview.classList.add('hidden');
   aiAskBtn.disabled = true; aiStatus.textContent = 'Asking local model…'; aiStatus.className = 'raw-status';
-  const before = JSON.parse(JSON.stringify(doc));
+  const before = cloneJson(doc);
   try {
     const res = await fetch('/api/ai-edit-caption', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1373,10 +1489,12 @@ async function askAiEdit() {
     aiRawWrap.classList.toggle('hidden', !out.raw_model_response);
     if (!out.ok) throw new Error(out.error || 'AI edit failed.');
     pendingAiCaption = out.caption;
+    pendingAiBeforeCaption = before;
     aiStatus.textContent = out.validation && out.validation.valid ? 'Received valid AI-edited caption.' : 'Received AI result.';
     aiStatus.className = 'raw-status ok';
     aiDiff.textContent = summarizeAiDiff(before, pendingAiCaption);
     aiDiff.classList.remove('hidden');
+    renderAiReview(before, pendingAiCaption);
     aiDiscardBtn.classList.remove('hidden');
     if (aiAutoApply.checked) applyAiCaption(pendingAiCaption);
     else aiApplyBtn.classList.remove('hidden');
@@ -1388,8 +1506,10 @@ async function askAiEdit() {
   }
 }
 aiAskBtn.addEventListener('click', askAiEdit);
-aiApplyBtn.addEventListener('click', () => { applyAiCaption(pendingAiCaption); aiApplyBtn.classList.add('hidden'); });
-aiDiscardBtn.addEventListener('click', () => { pendingAiCaption = null; aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiStatus.textContent = 'AI result discarded.'; });
+aiApplyBtn.addEventListener('click', () => { applySelectedAiChanges(); aiApplyBtn.classList.add('hidden'); });
+aiDiscardBtn.addEventListener('click', () => { pendingAiCaption = null; pendingAiBeforeCaption = null; aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiReview.classList.add('hidden'); aiStatus.textContent = 'AI result discarded.'; });
+aiSelectAllBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = true; });
+aiSelectNoneBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = false; });
 aiResetPromptBtn.addEventListener('click', () => { aiPromptTemplate.value = DEFAULT_AI_PROMPT_TEMPLATE; saveAiPrefs(); });
 for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate]) {
   el.addEventListener('change', () => { updateAiRemoteWarning(); saveAiPrefs(); });

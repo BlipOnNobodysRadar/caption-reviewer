@@ -467,3 +467,11 @@ body.dirty .active-name::after {
 .ai-diff { border: 1px solid #2a3144; border-radius: 8px; padding: 8px; background: #0c1019; color: #d7def5; font-size: 12px; white-space: pre-wrap; }
 .fld-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 #aiRawResponse, #aiPromptTemplate { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.ai-review { border: 1px solid #2a3144; border-radius: 10px; padding: 8px; background: #0c1019; }
+.ai-preview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ai-preview-card { display: grid; gap: 5px; min-width: 0; color: #d7def5; font-size: 12px; }
+.ai-preview-card canvas { width: 100%; height: 180px; border: 1px solid #2a3144; border-radius: 8px; background: #05070c; }
+.ai-change-head { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.ai-change-list { display: grid; gap: 5px; max-height: 180px; overflow: auto; margin-top: 6px; }
+.ai-change-item { display: grid; grid-template-columns: auto 1fr; gap: 7px; align-items: start; padding: 6px; border: 1px solid #252c3d; border-radius: 7px; background: #111622; font-size: 12px; }
+.ai-change-item .muted { display: block; margin-top: 2px; }
