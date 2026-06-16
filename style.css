@@ -480,8 +480,10 @@ body.dirty .active-name::after {
 .ai-overlay-modal.hidden { display: none; }
 .ai-overlay-bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #2a3144; background: #111622; }
 .ai-overlay-bar .spacer { flex: 1; }
-#aiOverlayCanvas { width: 100%; height: 100%; min-height: 0; cursor: grab; background: #05070c; }
-#aiOverlayCanvas.dragging { cursor: grabbing; }
+.ai-overlay-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 0; padding: 10px; }
+.ai-overlay-pane { display: grid; grid-template-rows: auto 1fr; gap: 6px; min-width: 0; min-height: 0; color: #d7def5; }
+.ai-overlay-pane canvas { width: 100%; height: 100%; min-height: 0; cursor: grab; background: #05070c; border: 1px solid #2a3144; border-radius: 8px; }
+.ai-overlay-pane canvas.dragging { cursor: grabbing; }
 .ai-overlay-help { padding: 7px 12px; border-top: 1px solid #2a3144; color: #8a90a6; background: #111622; font-size: 12px; }
 .ai-change-detail { display: block; margin-top: 3px; }
 .ai-change-detail code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: #d7def5; }

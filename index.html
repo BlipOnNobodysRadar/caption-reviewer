@@ -387,8 +387,17 @@
       <button id="aiOverlayFit" class="bar-btn" title="Fit image">Fit</button>
       <button id="aiOverlayClose" class="bar-btn icon" title="Close">&times;</button>
     </div>
-    <canvas id="aiOverlayCanvas"></canvas>
-    <div class="ai-overlay-help">Mouse wheel zooms. Drag to pan. Double-click or Fit resets the view. Esc closes.</div>
+    <div class="ai-overlay-compare">
+      <section class="ai-overlay-pane">
+        <strong>Before</strong>
+        <canvas id="aiOverlayBeforeCanvas"></canvas>
+      </section>
+      <section class="ai-overlay-pane">
+        <strong>After</strong>
+        <canvas id="aiOverlayAfterCanvas"></canvas>
+      </section>
+    </div>
+    <div class="ai-overlay-help">Mouse wheel zooms both panes. Drag either pane to pan both. Double-click or Fit resets both views. Esc closes.</div>
   </div>
 
   <!-- floating per-box caption tooltip -->

@@ -1256,7 +1256,7 @@ const aiEditRequest = $('aiEditRequest'), aiAskBtn = $('aiAskBtn'), aiApplyBtn =
 const aiStatus = $('aiStatus'), aiRemoteWarning = $('aiRemoteWarning'), aiDiff = $('aiDiff'), aiRawWrap = $('aiRawWrap'), aiRawResponse = $('aiRawResponse');
 const aiReview = $('aiReview'), aiBeforeCanvas = $('aiBeforeCanvas'), aiAfterCanvas = $('aiAfterCanvas'), aiChangeList = $('aiChangeList');
 const aiSelectAllBtn = $('aiSelectAllBtn'), aiSelectNoneBtn = $('aiSelectNoneBtn');
-const aiOverlayModal = $('aiOverlayModal'), aiOverlayCanvas = $('aiOverlayCanvas'), aiOverlayTitle = $('aiOverlayTitle');
+const aiOverlayModal = $('aiOverlayModal'), aiOverlayBeforeCanvas = $('aiOverlayBeforeCanvas'), aiOverlayAfterCanvas = $('aiOverlayAfterCanvas'), aiOverlayTitle = $('aiOverlayTitle');
 const aiOverlayZoomOut = $('aiOverlayZoomOut'), aiOverlayZoomIn = $('aiOverlayZoomIn'), aiOverlayFit = $('aiOverlayFit'), aiOverlayClose = $('aiOverlayClose'), aiOverlayZoomLabel = $('aiOverlayZoomLabel');
 const aiEnabled = $('aiEnabled'), aiBaseUrl = $('aiBaseUrl'), aiEndpointPath = $('aiEndpointPath'), aiModel = $('aiModel');
 const aiMaxTokens = $('aiMaxTokens'), aiTemperature = $('aiTemperature'), aiTimeout = $('aiTimeout'), aiSendOriginal = $('aiSendOriginal');
@@ -1265,7 +1265,7 @@ const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiInclu
 const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn');
 let pendingAiCaption = null;
 let pendingAiBeforeCaption = null;
-let aiOverlayState = { caption: null, title: '', scale: 1, ox: 0, oy: 0, drag: null };
+let aiOverlayState = { before: null, after: null, scale: 1, ox: 0, oy: 0, drag: null };
 
 function aiSettingsFromUi() {
   return {
@@ -1473,8 +1473,8 @@ function renderAiChangeList(before, after) {
   }
 }
 function fitAiOverlayModal() {
-  if (!imgLoaded || !aiOverlayState.caption) return;
-  const rect = aiOverlayCanvas.getBoundingClientRect();
+  if (!imgLoaded || !aiOverlayState.before || !aiOverlayState.after) return;
+  const rect = aiOverlayBeforeCanvas.getBoundingClientRect();
   const margin = 32;
   aiOverlayState.scale = Math.min((rect.width - margin) / img.naturalWidth, (rect.height - margin) / img.naturalHeight);
   aiOverlayState.scale = Math.max(0.02, Math.min(32, aiOverlayState.scale));
@@ -1483,38 +1483,43 @@ function fitAiOverlayModal() {
   drawAiOverlayModal();
 }
 function drawAiOverlayModal() {
-  if (aiOverlayModal.classList.contains('hidden') || !imgLoaded || !aiOverlayState.caption) return;
-  const rect = aiOverlayCanvas.getBoundingClientRect();
+  if (aiOverlayModal.classList.contains('hidden') || !imgLoaded || !aiOverlayState.before || !aiOverlayState.after) return;
   const dpr = window.devicePixelRatio || 1;
-  aiOverlayCanvas.width = Math.max(1, Math.round(rect.width * dpr));
-  aiOverlayCanvas.height = Math.max(1, Math.round(rect.height * dpr));
-  const mctx = aiOverlayCanvas.getContext('2d');
-  mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  mctx.clearRect(0, 0, rect.width, rect.height);
-  mctx.fillStyle = '#05070c'; mctx.fillRect(0, 0, rect.width, rect.height);
-  mctx.imageSmoothingEnabled = aiOverlayState.scale < 2.5;
-  mctx.drawImage(img, aiOverlayState.ox, aiOverlayState.oy, img.naturalWidth * aiOverlayState.scale, img.naturalHeight * aiOverlayState.scale);
-  drawCaptionOverlayAt(mctx, aiOverlayState.caption, {
-    ox: aiOverlayState.ox, oy: aiOverlayState.oy, scale: aiOverlayState.scale,
-    width: rect.width, height: rect.height
-  }, { labelFont: '700 13px system-ui', lineWidth: 2.5 });
+  const drawPane = (canvas, caption) => {
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    canvas.height = Math.max(1, Math.round(rect.height * dpr));
+    const mctx = canvas.getContext('2d');
+    mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    mctx.clearRect(0, 0, rect.width, rect.height);
+    mctx.fillStyle = '#05070c'; mctx.fillRect(0, 0, rect.width, rect.height);
+    mctx.imageSmoothingEnabled = aiOverlayState.scale < 2.5;
+    mctx.drawImage(img, aiOverlayState.ox, aiOverlayState.oy, img.naturalWidth * aiOverlayState.scale, img.naturalHeight * aiOverlayState.scale);
+    drawCaptionOverlayAt(mctx, caption, {
+      ox: aiOverlayState.ox, oy: aiOverlayState.oy, scale: aiOverlayState.scale,
+      width: rect.width, height: rect.height
+    }, { labelFont: '700 13px system-ui', lineWidth: 2.5 });
+  };
+  drawPane(aiOverlayBeforeCanvas, aiOverlayState.before);
+  drawPane(aiOverlayAfterCanvas, aiOverlayState.after);
   aiOverlayZoomLabel.textContent = Math.round(aiOverlayState.scale * 100) + '%';
 }
-function openAiOverlayModal(caption, title) {
-  if (!caption || !imgLoaded) return;
-  aiOverlayState = { caption, title, scale: 1, ox: 0, oy: 0, drag: null };
-  aiOverlayTitle.textContent = title;
+function openAiOverlayModal() {
+  if (!pendingAiBeforeCaption || !pendingAiCaption || !imgLoaded) return;
+  aiOverlayState = { before: pendingAiBeforeCaption, after: pendingAiCaption, scale: 1, ox: 0, oy: 0, drag: null };
+  aiOverlayTitle.textContent = 'AI Edit before/after overlay comparison';
   aiOverlayModal.classList.remove('hidden');
   requestAnimationFrame(fitAiOverlayModal);
 }
 function closeAiOverlayModal() {
   aiOverlayModal.classList.add('hidden');
   aiOverlayState.drag = null;
-  aiOverlayCanvas.classList.remove('dragging');
+  aiOverlayBeforeCanvas.classList.remove('dragging');
+  aiOverlayAfterCanvas.classList.remove('dragging');
 }
 function zoomAiOverlay(factor, center) {
-  if (!aiOverlayState.caption) return;
-  const rect = aiOverlayCanvas.getBoundingClientRect();
+  if (!aiOverlayState.before || !aiOverlayState.after) return;
+  const rect = aiOverlayBeforeCanvas.getBoundingClientRect();
   const p = center || { x: rect.width / 2, y: rect.height / 2 };
   const ix = (p.x - aiOverlayState.ox) / aiOverlayState.scale;
   const iy = (p.y - aiOverlayState.oy) / aiOverlayState.scale;
@@ -1589,18 +1594,20 @@ aiApplyBtn.addEventListener('click', () => { applySelectedAiChanges(); aiApplyBt
 aiDiscardBtn.addEventListener('click', () => { pendingAiCaption = null; pendingAiBeforeCaption = null; aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiReview.classList.add('hidden'); aiStatus.textContent = 'AI result discarded.'; });
 aiSelectAllBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = true; });
 aiSelectNoneBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = false; });
-aiBeforeCanvas.addEventListener('click', () => openAiOverlayModal(pendingAiBeforeCaption, 'AI Edit before overlay'));
-aiAfterCanvas.addEventListener('click', () => openAiOverlayModal(pendingAiCaption, 'AI Edit after overlay'));
+aiBeforeCanvas.addEventListener('click', openAiOverlayModal);
+aiAfterCanvas.addEventListener('click', openAiOverlayModal);
 aiOverlayClose.addEventListener('click', closeAiOverlayModal);
 aiOverlayFit.addEventListener('click', fitAiOverlayModal);
 aiOverlayZoomIn.addEventListener('click', () => zoomAiOverlay(1.25));
 aiOverlayZoomOut.addEventListener('click', () => zoomAiOverlay(0.8));
-aiOverlayCanvas.addEventListener('dblclick', fitAiOverlayModal);
-aiOverlayCanvas.addEventListener('wheel', (ev) => { ev.preventDefault(); const r = aiOverlayCanvas.getBoundingClientRect(); zoomAiOverlay(ev.deltaY < 0 ? 1.12 : 0.89, { x: ev.clientX - r.left, y: ev.clientY - r.top }); }, { passive: false });
-aiOverlayCanvas.addEventListener('pointerdown', (ev) => { if (!aiOverlayState.caption) return; aiOverlayState.drag = { x: ev.clientX, y: ev.clientY, ox: aiOverlayState.ox, oy: aiOverlayState.oy }; aiOverlayCanvas.setPointerCapture(ev.pointerId); aiOverlayCanvas.classList.add('dragging'); });
-aiOverlayCanvas.addEventListener('pointermove', (ev) => { const d = aiOverlayState.drag; if (!d) return; aiOverlayState.ox = d.ox + ev.clientX - d.x; aiOverlayState.oy = d.oy + ev.clientY - d.y; drawAiOverlayModal(); });
-aiOverlayCanvas.addEventListener('pointerup', () => { aiOverlayState.drag = null; aiOverlayCanvas.classList.remove('dragging'); });
-aiOverlayCanvas.addEventListener('pointercancel', () => { aiOverlayState.drag = null; aiOverlayCanvas.classList.remove('dragging'); });
+for (const modalCanvas of [aiOverlayBeforeCanvas, aiOverlayAfterCanvas]) {
+  modalCanvas.addEventListener('dblclick', fitAiOverlayModal);
+  modalCanvas.addEventListener('wheel', (ev) => { ev.preventDefault(); const r = modalCanvas.getBoundingClientRect(); zoomAiOverlay(ev.deltaY < 0 ? 1.12 : 0.89, { x: ev.clientX - r.left, y: ev.clientY - r.top }); }, { passive: false });
+  modalCanvas.addEventListener('pointerdown', (ev) => { if (!aiOverlayState.before || !aiOverlayState.after) return; aiOverlayState.drag = { x: ev.clientX, y: ev.clientY, ox: aiOverlayState.ox, oy: aiOverlayState.oy }; modalCanvas.setPointerCapture(ev.pointerId); aiOverlayBeforeCanvas.classList.add('dragging'); aiOverlayAfterCanvas.classList.add('dragging'); });
+  modalCanvas.addEventListener('pointermove', (ev) => { const d = aiOverlayState.drag; if (!d) return; aiOverlayState.ox = d.ox + ev.clientX - d.x; aiOverlayState.oy = d.oy + ev.clientY - d.y; drawAiOverlayModal(); });
+  modalCanvas.addEventListener('pointerup', () => { aiOverlayState.drag = null; aiOverlayBeforeCanvas.classList.remove('dragging'); aiOverlayAfterCanvas.classList.remove('dragging'); });
+  modalCanvas.addEventListener('pointercancel', () => { aiOverlayState.drag = null; aiOverlayBeforeCanvas.classList.remove('dragging'); aiOverlayAfterCanvas.classList.remove('dragging'); });
+}
 aiResetPromptBtn.addEventListener('click', () => { aiPromptTemplate.value = DEFAULT_AI_PROMPT_TEMPLATE; saveAiPrefs(); });
 window.addEventListener('resize', () => { if (!aiOverlayModal.classList.contains('hidden')) drawAiOverlayModal(); });
 for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate]) {
