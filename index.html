@@ -374,6 +374,23 @@
     </div>
   </aside>
 
+
+
+  <!-- AI before/after overlay modal -->
+  <div id="aiOverlayModal" class="ai-overlay-modal hidden" role="dialog" aria-modal="true" aria-labelledby="aiOverlayTitle">
+    <div class="ai-overlay-bar">
+      <strong id="aiOverlayTitle">AI overlay preview</strong>
+      <span class="spacer"></span>
+      <button id="aiOverlayZoomOut" class="bar-btn" title="Zoom out">&#8722;</button>
+      <span id="aiOverlayZoomLabel" class="zoom-label">100%</span>
+      <button id="aiOverlayZoomIn" class="bar-btn" title="Zoom in">+</button>
+      <button id="aiOverlayFit" class="bar-btn" title="Fit image">Fit</button>
+      <button id="aiOverlayClose" class="bar-btn icon" title="Close">&times;</button>
+    </div>
+    <canvas id="aiOverlayCanvas"></canvas>
+    <div class="ai-overlay-help">Mouse wheel zooms. Drag to pan. Double-click or Fit resets the view. Esc closes.</div>
+  </div>
+
   <!-- floating per-box caption tooltip -->
   <div id="boxTip" class="box-tip hidden"></div>
 

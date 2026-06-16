@@ -475,3 +475,14 @@ body.dirty .active-name::after {
 .ai-change-list { display: grid; gap: 5px; max-height: 180px; overflow: auto; margin-top: 6px; }
 .ai-change-item { display: grid; grid-template-columns: auto 1fr; gap: 7px; align-items: start; padding: 6px; border: 1px solid #252c3d; border-radius: 7px; background: #111622; font-size: 12px; }
 .ai-change-item .muted { display: block; margin-top: 2px; }
+.ai-preview-card canvas { cursor: zoom-in; }
+.ai-overlay-modal { position: fixed; inset: 0; z-index: 80; background: rgba(5, 7, 12, 0.96); display: grid; grid-template-rows: auto 1fr auto; }
+.ai-overlay-modal.hidden { display: none; }
+.ai-overlay-bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #2a3144; background: #111622; }
+.ai-overlay-bar .spacer { flex: 1; }
+#aiOverlayCanvas { width: 100%; height: 100%; min-height: 0; cursor: grab; background: #05070c; }
+#aiOverlayCanvas.dragging { cursor: grabbing; }
+.ai-overlay-help { padding: 7px 12px; border-top: 1px solid #2a3144; color: #8a90a6; background: #111622; font-size: 12px; }
+.ai-change-detail { display: block; margin-top: 3px; }
+.ai-change-detail code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: #d7def5; }
+.ai-change-detail { white-space: pre-wrap; }

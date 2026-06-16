@@ -1256,6 +1256,8 @@ const aiEditRequest = $('aiEditRequest'), aiAskBtn = $('aiAskBtn'), aiApplyBtn =
 const aiStatus = $('aiStatus'), aiRemoteWarning = $('aiRemoteWarning'), aiDiff = $('aiDiff'), aiRawWrap = $('aiRawWrap'), aiRawResponse = $('aiRawResponse');
 const aiReview = $('aiReview'), aiBeforeCanvas = $('aiBeforeCanvas'), aiAfterCanvas = $('aiAfterCanvas'), aiChangeList = $('aiChangeList');
 const aiSelectAllBtn = $('aiSelectAllBtn'), aiSelectNoneBtn = $('aiSelectNoneBtn');
+const aiOverlayModal = $('aiOverlayModal'), aiOverlayCanvas = $('aiOverlayCanvas'), aiOverlayTitle = $('aiOverlayTitle');
+const aiOverlayZoomOut = $('aiOverlayZoomOut'), aiOverlayZoomIn = $('aiOverlayZoomIn'), aiOverlayFit = $('aiOverlayFit'), aiOverlayClose = $('aiOverlayClose'), aiOverlayZoomLabel = $('aiOverlayZoomLabel');
 const aiEnabled = $('aiEnabled'), aiBaseUrl = $('aiBaseUrl'), aiEndpointPath = $('aiEndpointPath'), aiModel = $('aiModel');
 const aiMaxTokens = $('aiMaxTokens'), aiTemperature = $('aiTemperature'), aiTimeout = $('aiTimeout'), aiSendOriginal = $('aiSendOriginal');
 const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiOverlayMax = $('aiOverlayMax');
@@ -1263,6 +1265,7 @@ const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiInclu
 const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn');
 let pendingAiCaption = null;
 let pendingAiBeforeCaption = null;
+let aiOverlayState = { caption: null, title: '', scale: 1, ox: 0, oy: 0, drag: null };
 
 function aiSettingsFromUi() {
   return {
@@ -1389,6 +1392,44 @@ function mergeSelectedAiCaption(before, after) {
   C.getElements(merged, { create: true }).splice(0, C.getElements(merged, { create: true }).length, ...outEls);
   return merged;
 }
+function drawCaptionOverlayAt(pctx, caption, geom, opts = {}) {
+  const arr = (caption && C.getElements(caption)) || [];
+  const labelFont = opts.labelFont || '700 11px system-ui';
+  const lineWidth = opts.lineWidth || 2;
+  pctx.textBaseline = 'top'; pctx.font = labelFont;
+  for (let i = 0; i < arr.length; i++) {
+    const r = C.bboxToRect(arr[i].bbox, order(), coordMax(), img.naturalWidth, img.naturalHeight);
+    if (!r) continue;
+    const color = C.colorForIndex(i);
+    const x = geom.ox + r.left * geom.scale, y = geom.oy + r.top * geom.scale;
+    const w = r.width * geom.scale, h = r.height * geom.scale;
+    pctx.strokeStyle = color; pctx.lineWidth = lineWidth; pctx.strokeRect(x, y, w, h);
+    const text = C.shortLabel(arr[i], i);
+    const tw = Math.min(geom.width - x - 4, pctx.measureText(text).width + 8);
+    const ly = Math.max(0, y - 15);
+    pctx.fillStyle = color; pctx.fillRect(x, ly, Math.max(30, tw), 15);
+    pctx.fillStyle = '#0c0e14'; pctx.fillText(text, x + 4, ly + 2);
+  }
+}
+function elementDiffDetails(beforeEl, afterEl) {
+  const fields = ['type', 'bbox', 'desc', 'description', 'text', 'color_palette'];
+  const lines = [];
+  for (const key of fields) {
+    const bv = beforeEl ? beforeEl[key] : undefined;
+    const av = afterEl ? afterEl[key] : undefined;
+    if (JSON.stringify(bv) !== JSON.stringify(av)) {
+      lines.push(`${key}: ${JSON.stringify(bv)} → ${JSON.stringify(av)}`);
+    }
+  }
+  const extra = new Set([...Object.keys(beforeEl || {}), ...Object.keys(afterEl || {})]);
+  for (const key of extra) {
+    if (fields.includes(key)) continue;
+    const bv = beforeEl ? beforeEl[key] : undefined;
+    const av = afterEl ? afterEl[key] : undefined;
+    if (JSON.stringify(bv) !== JSON.stringify(av)) lines.push(`${key}: ${JSON.stringify(bv)} → ${JSON.stringify(av)}`);
+  }
+  return lines;
+}
 function drawAiPreview(canvas, caption) {
   if (!canvas || !imgLoaded || !caption) return;
   const cssW = Math.max(220, canvas.clientWidth || 300), cssH = Math.max(160, canvas.clientHeight || 180);
@@ -1402,20 +1443,7 @@ function drawAiPreview(canvas, caption) {
   const scale = Math.min((cssW - margin * 2) / img.naturalWidth, (cssH - margin * 2) / img.naturalHeight);
   const ox = (cssW - img.naturalWidth * scale) / 2, oy = (cssH - img.naturalHeight * scale) / 2;
   pctx.drawImage(img, ox, oy, img.naturalWidth * scale, img.naturalHeight * scale);
-  const arr = (caption && C.getElements(caption)) || [];
-  pctx.textBaseline = 'top'; pctx.font = '700 11px system-ui';
-  for (let i = 0; i < arr.length; i++) {
-    const r = C.bboxToRect(arr[i].bbox, order(), coordMax(), img.naturalWidth, img.naturalHeight);
-    if (!r) continue;
-    const color = C.colorForIndex(i);
-    const x = ox + r.left * scale, y = oy + r.top * scale, w = r.width * scale, h = r.height * scale;
-    pctx.strokeStyle = color; pctx.lineWidth = 2; pctx.strokeRect(x, y, w, h);
-    const text = C.shortLabel(arr[i], i);
-    const tw = Math.min(cssW - x - 4, pctx.measureText(text).width + 8);
-    const ly = Math.max(0, y - 15);
-    pctx.fillStyle = color; pctx.fillRect(x, ly, Math.max(30, tw), 15);
-    pctx.fillStyle = '#0c0e14'; pctx.fillText(text, x + 4, ly + 2);
-  }
+  drawCaptionOverlayAt(pctx, caption, { ox, oy, scale, width: cssW, height: cssH });
 }
 function renderAiChangeList(before, after) {
   aiChangeList.innerHTML = '';
@@ -1425,7 +1453,7 @@ function renderAiChangeList(before, after) {
     const cb = document.createElement('input');
     cb.type = 'checkbox'; cb.checked = checked; cb.dataset.changeKey = key;
     const body = document.createElement('span');
-    body.innerHTML = `${escapeText(title)}${detail ? `<span class="muted">${escapeText(detail)}</span>` : ''}`;
+    body.innerHTML = `${escapeText(title)}${detail ? `<span class="muted ai-change-detail">${escapeText(detail)}</span>` : ''}`;
     label.append(cb, body);
     aiChangeList.appendChild(label);
   };
@@ -1433,7 +1461,7 @@ function renderAiChangeList(before, after) {
   const b = (before && C.getElements(before)) || [], a = (after && C.getElements(after)) || [];
   const n = Math.max(b.length, a.length);
   for (let i = 0; i < n; i++) {
-    if (b[i] && a[i] && JSON.stringify(b[i]) !== JSON.stringify(a[i])) addItem('el-change-' + i, `Changed ${aiElementLabel(a[i], i)}`, `Before: ${aiElementLabel(b[i], i)} bbox=${JSON.stringify(b[i].bbox)} → after bbox=${JSON.stringify(a[i].bbox)}`);
+    if (b[i] && a[i] && JSON.stringify(b[i]) !== JSON.stringify(a[i])) addItem('el-change-' + i, `Changed ${aiElementLabel(a[i], i)}`, elementDiffDetails(b[i], a[i]).join('\n'));
     else if (!b[i] && a[i]) addItem('el-add-' + i, `Added ${aiElementLabel(a[i], i)}`, `bbox=${JSON.stringify(a[i].bbox)}`);
     else if (b[i] && !a[i]) addItem('el-remove-' + i, `Removed ${aiElementLabel(b[i], i)}`, `Original bbox=${JSON.stringify(b[i].bbox)}`);
   }
@@ -1443,6 +1471,57 @@ function renderAiChangeList(before, after) {
     empty.textContent = 'No element-level differences detected.';
     aiChangeList.appendChild(empty);
   }
+}
+function fitAiOverlayModal() {
+  if (!imgLoaded || !aiOverlayState.caption) return;
+  const rect = aiOverlayCanvas.getBoundingClientRect();
+  const margin = 32;
+  aiOverlayState.scale = Math.min((rect.width - margin) / img.naturalWidth, (rect.height - margin) / img.naturalHeight);
+  aiOverlayState.scale = Math.max(0.02, Math.min(32, aiOverlayState.scale));
+  aiOverlayState.ox = (rect.width - img.naturalWidth * aiOverlayState.scale) / 2;
+  aiOverlayState.oy = (rect.height - img.naturalHeight * aiOverlayState.scale) / 2;
+  drawAiOverlayModal();
+}
+function drawAiOverlayModal() {
+  if (aiOverlayModal.classList.contains('hidden') || !imgLoaded || !aiOverlayState.caption) return;
+  const rect = aiOverlayCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  aiOverlayCanvas.width = Math.max(1, Math.round(rect.width * dpr));
+  aiOverlayCanvas.height = Math.max(1, Math.round(rect.height * dpr));
+  const mctx = aiOverlayCanvas.getContext('2d');
+  mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  mctx.clearRect(0, 0, rect.width, rect.height);
+  mctx.fillStyle = '#05070c'; mctx.fillRect(0, 0, rect.width, rect.height);
+  mctx.imageSmoothingEnabled = aiOverlayState.scale < 2.5;
+  mctx.drawImage(img, aiOverlayState.ox, aiOverlayState.oy, img.naturalWidth * aiOverlayState.scale, img.naturalHeight * aiOverlayState.scale);
+  drawCaptionOverlayAt(mctx, aiOverlayState.caption, {
+    ox: aiOverlayState.ox, oy: aiOverlayState.oy, scale: aiOverlayState.scale,
+    width: rect.width, height: rect.height
+  }, { labelFont: '700 13px system-ui', lineWidth: 2.5 });
+  aiOverlayZoomLabel.textContent = Math.round(aiOverlayState.scale * 100) + '%';
+}
+function openAiOverlayModal(caption, title) {
+  if (!caption || !imgLoaded) return;
+  aiOverlayState = { caption, title, scale: 1, ox: 0, oy: 0, drag: null };
+  aiOverlayTitle.textContent = title;
+  aiOverlayModal.classList.remove('hidden');
+  requestAnimationFrame(fitAiOverlayModal);
+}
+function closeAiOverlayModal() {
+  aiOverlayModal.classList.add('hidden');
+  aiOverlayState.drag = null;
+  aiOverlayCanvas.classList.remove('dragging');
+}
+function zoomAiOverlay(factor, center) {
+  if (!aiOverlayState.caption) return;
+  const rect = aiOverlayCanvas.getBoundingClientRect();
+  const p = center || { x: rect.width / 2, y: rect.height / 2 };
+  const ix = (p.x - aiOverlayState.ox) / aiOverlayState.scale;
+  const iy = (p.y - aiOverlayState.oy) / aiOverlayState.scale;
+  aiOverlayState.scale = Math.max(0.02, Math.min(32, aiOverlayState.scale * factor));
+  aiOverlayState.ox = p.x - ix * aiOverlayState.scale;
+  aiOverlayState.oy = p.y - iy * aiOverlayState.scale;
+  drawAiOverlayModal();
 }
 function renderAiReview(before, after) {
   if (!before || !after) { aiReview.classList.add('hidden'); return; }
@@ -1510,7 +1589,20 @@ aiApplyBtn.addEventListener('click', () => { applySelectedAiChanges(); aiApplyBt
 aiDiscardBtn.addEventListener('click', () => { pendingAiCaption = null; pendingAiBeforeCaption = null; aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiReview.classList.add('hidden'); aiStatus.textContent = 'AI result discarded.'; });
 aiSelectAllBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = true; });
 aiSelectNoneBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = false; });
+aiBeforeCanvas.addEventListener('click', () => openAiOverlayModal(pendingAiBeforeCaption, 'AI Edit before overlay'));
+aiAfterCanvas.addEventListener('click', () => openAiOverlayModal(pendingAiCaption, 'AI Edit after overlay'));
+aiOverlayClose.addEventListener('click', closeAiOverlayModal);
+aiOverlayFit.addEventListener('click', fitAiOverlayModal);
+aiOverlayZoomIn.addEventListener('click', () => zoomAiOverlay(1.25));
+aiOverlayZoomOut.addEventListener('click', () => zoomAiOverlay(0.8));
+aiOverlayCanvas.addEventListener('dblclick', fitAiOverlayModal);
+aiOverlayCanvas.addEventListener('wheel', (ev) => { ev.preventDefault(); const r = aiOverlayCanvas.getBoundingClientRect(); zoomAiOverlay(ev.deltaY < 0 ? 1.12 : 0.89, { x: ev.clientX - r.left, y: ev.clientY - r.top }); }, { passive: false });
+aiOverlayCanvas.addEventListener('pointerdown', (ev) => { if (!aiOverlayState.caption) return; aiOverlayState.drag = { x: ev.clientX, y: ev.clientY, ox: aiOverlayState.ox, oy: aiOverlayState.oy }; aiOverlayCanvas.setPointerCapture(ev.pointerId); aiOverlayCanvas.classList.add('dragging'); });
+aiOverlayCanvas.addEventListener('pointermove', (ev) => { const d = aiOverlayState.drag; if (!d) return; aiOverlayState.ox = d.ox + ev.clientX - d.x; aiOverlayState.oy = d.oy + ev.clientY - d.y; drawAiOverlayModal(); });
+aiOverlayCanvas.addEventListener('pointerup', () => { aiOverlayState.drag = null; aiOverlayCanvas.classList.remove('dragging'); });
+aiOverlayCanvas.addEventListener('pointercancel', () => { aiOverlayState.drag = null; aiOverlayCanvas.classList.remove('dragging'); });
 aiResetPromptBtn.addEventListener('click', () => { aiPromptTemplate.value = DEFAULT_AI_PROMPT_TEMPLATE; saveAiPrefs(); });
+window.addEventListener('resize', () => { if (!aiOverlayModal.classList.contains('hidden')) drawAiOverlayModal(); });
 for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate]) {
   el.addEventListener('change', () => { updateAiRemoteWarning(); saveAiPrefs(); });
   el.addEventListener('input', debounce(() => { updateAiRemoteWarning(); saveAiPrefs(); }, 300));
@@ -1586,6 +1678,7 @@ async function saveAndNext(markFixed = false) {
 
 /* ---------------- keyboard ---------------- */
 document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && aiOverlayModal && !aiOverlayModal.classList.contains('hidden')) { closeAiOverlayModal(); ev.preventDefault(); return; }
   if (ev.key === ' ' && !ev.target.matches('input, textarea, select, button')) {
     spaceHeld = true;
     setCanvasCursor(lastPointer);
