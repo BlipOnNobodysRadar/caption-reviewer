@@ -335,21 +335,124 @@ def extract_model_text(payload: dict[str, Any]) -> str:
     return ""
 
 
-def parse_ai_caption_response(text: str) -> tuple[dict[str, Any] | None, str | None]:
+def parse_ai_json_response(text: str) -> tuple[Any | None, str | None]:
     stripped = (text or "").strip()
     if not stripped:
         return None, "Model response was empty."
     if "```" in stripped:
         return None, "Model response used markdown/code fences; expected raw JSON only."
     try:
-        obj = json.loads(stripped)
+        return json.loads(stripped), None
     except Exception as exc:
         return None, f"Model response was not valid JSON: {exc}"
-    if isinstance(obj, dict) and isinstance(obj.get("edited_caption"), dict):
-        obj = obj["edited_caption"]
+
+
+def is_full_caption_object(value: Any) -> bool:
+    return isinstance(value, dict) and isinstance(value.get("style_description"), dict) and isinstance(value.get("compositional_deconstruction"), dict)
+
+
+def set_caption_path(target: dict[str, Any], path: list[Any], value: Any) -> str | None:
+    if not path or not all(isinstance(part, str) and part for part in path):
+        return "set_field path must be a non-empty array of strings."
+    if any(part in ("__proto__", "constructor", "prototype") for part in path):
+        return "set_field path contains a forbidden key."
+    if "elements" in path:
+        return "Use element operations instead of set_field for elements."
+    cur: Any = target
+    for part in path[:-1]:
+        nxt = cur.get(part) if isinstance(cur, dict) else None
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[part] = nxt
+        cur = nxt
+    cur[path[-1]] = value
+    return None
+
+
+def normalize_ai_edit_ops(obj: Any) -> tuple[list[dict[str, Any]] | None, str | None]:
     if not isinstance(obj, dict):
         return None, "Model response JSON was not an object."
-    return obj, None
+    ops = obj.get("caption_edits", obj.get("edits", obj.get("operations")))
+    if not isinstance(ops, list):
+        return None, "Model response did not contain caption_edits/edits operations."
+    out = []
+    for i, op in enumerate(ops):
+        if not isinstance(op, dict):
+            return None, f"Edit operation {i + 1} is not an object."
+        out.append(op)
+    return out, None
+
+
+def apply_ai_edit_ops(current_caption: dict[str, Any], ops: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, list[str]]:
+    edited = json.loads(json.dumps(current_caption))
+    elems = extract_elements(edited)
+    if not isinstance(elems, list):
+        if not isinstance(edited.get("compositional_deconstruction"), dict):
+            edited["compositional_deconstruction"] = {}
+        edited["compositional_deconstruction"]["elements"] = []
+        elems = edited["compositional_deconstruction"]["elements"]
+    errors: list[str] = []
+    removals: list[int] = []
+    for op_num, op in enumerate(ops, start=1):
+        kind = str(op.get("op") or op.get("type") or "").strip().lower()
+        if kind in ("update", "update_element", "modify_element"):
+            index = op.get("index")
+            fields = op.get("fields")
+            if not isinstance(index, int) or index < 0 or index >= len(elems):
+                errors.append(f"Operation {op_num}: update_element index is out of range.")
+                continue
+            if not isinstance(fields, dict) or not fields:
+                errors.append(f"Operation {op_num}: update_element fields must be a non-empty object.")
+                continue
+            elems[index].update(json.loads(json.dumps(fields)))
+        elif kind in ("add", "add_element"):
+            element = op.get("element")
+            if not isinstance(element, dict):
+                errors.append(f"Operation {op_num}: add_element requires an element object.")
+                continue
+            insert_at = op.get("index", len(elems))
+            if not isinstance(insert_at, int):
+                insert_at = len(elems)
+            insert_at = max(0, min(len(elems), insert_at))
+            elems.insert(insert_at, json.loads(json.dumps(element)))
+        elif kind in ("remove", "remove_element", "delete_element"):
+            index = op.get("index")
+            if not isinstance(index, int) or index < 0 or index >= len(elems):
+                errors.append(f"Operation {op_num}: remove_element index is out of range.")
+                continue
+            removals.append(index)
+        elif kind in ("set", "set_field"):
+            path = op.get("path")
+            if isinstance(path, str):
+                path = [part for part in path.split(".") if part]
+            err = set_caption_path(edited, path, op.get("value")) if isinstance(path, list) else "set_field path must be an array or dotted string."
+            if err:
+                errors.append(f"Operation {op_num}: {err}")
+        else:
+            errors.append(f"Operation {op_num}: unsupported op {kind!r}.")
+    for index in sorted(set(removals), reverse=True):
+        if 0 <= index < len(elems):
+            elems.pop(index)
+    return (None if errors else edited), errors
+
+
+def parse_ai_caption_response(text: str, current_caption: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str | None, str]:
+    obj, parse_error = parse_ai_json_response(text)
+    if parse_error:
+        return None, parse_error, "invalid"
+    if isinstance(obj, dict) and isinstance(obj.get("edited_caption"), dict):
+        return obj["edited_caption"], None, "edited_caption"
+    if is_full_caption_object(obj):
+        return obj, None, "full_caption"
+    ops, ops_error = normalize_ai_edit_ops(obj)
+    if ops is not None:
+        if not isinstance(current_caption, dict):
+            return None, "Model returned edit operations, but the current caption was unavailable.", "ops"
+        edited, errors = apply_ai_edit_ops(current_caption, ops)
+        if errors:
+            return None, "Invalid caption edit operations: " + "; ".join(errors), "ops"
+        return edited, None, "ops"
+    return None, ops_error or "Model response was neither a full caption nor caption edit operations.", "invalid"
 
 
 def validate_ai_caption(caption: Any, coordinate_max: int) -> dict[str, Any]:
@@ -784,13 +887,13 @@ def ai_edit_caption():
         raw_model_response = extract_model_text(json.loads(response_text))
     except Exception:
         raw_model_response = response_text
-    edited, parse_error = parse_ai_caption_response(raw_model_response)
+    edited, parse_error, response_mode = parse_ai_caption_response(raw_model_response, caption)
     if parse_error:
-        return jsonify({"ok": False, "error": parse_error, "raw_model_response": raw_model_response, "validation": {"valid": False, "errors": [parse_error]}, "debug": {"llamacpp_url": url, "overlay_generated": overlay_generated}}), 422
+        return jsonify({"ok": False, "error": parse_error, "raw_model_response": raw_model_response, "validation": {"valid": False, "errors": [parse_error]}, "debug": {"llamacpp_url": url, "overlay_generated": overlay_generated, "response_mode": response_mode}}), 422
     validation = validate_ai_caption(edited, coordinate_max)
     if not validation["valid"]:
-        return jsonify({"ok": False, "error": "Model returned invalid caption.", "raw_model_response": raw_model_response, "validation": validation, "debug": {"llamacpp_url": url, "overlay_generated": overlay_generated}}), 422
-    return jsonify({"ok": True, "caption": edited, "raw_model_response": raw_model_response, "validation": validation, "debug": {"overlay_generated": overlay_generated, "llamacpp_url": url}})
+        return jsonify({"ok": False, "error": "Model returned invalid caption.", "raw_model_response": raw_model_response, "validation": validation, "debug": {"llamacpp_url": url, "overlay_generated": overlay_generated, "response_mode": response_mode}}), 422
+    return jsonify({"ok": True, "caption": edited, "raw_model_response": raw_model_response, "validation": validation, "debug": {"overlay_generated": overlay_generated, "llamacpp_url": url, "response_mode": response_mode}})
 
 @app.route("/api/status", methods=["POST"])
 def set_status():

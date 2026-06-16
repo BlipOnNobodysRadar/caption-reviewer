@@ -1199,14 +1199,37 @@ You will receive:
 3. The current caption JSON.
 4. A user edit request.
 
-Your job is to return one edited caption JSON object and nothing else.
+Prefer returning a small edit operation object instead of rewriting the whole caption.
+Return raw JSON only, with no markdown, comments, explanation, or backticks.
+
+Preferred response format:
+{
+  "caption_edits": [
+    { "op": "update_element", "index": 0, "fields": { "bbox": [y_min, x_min, y_max, x_max], "desc": "updated description" } },
+    { "op": "add_element", "index": 3, "element": { "type": "obj", "bbox": [y_min, x_min, y_max, x_max], "desc": "new object" } },
+    { "op": "remove_element", "index": 2 },
+    { "op": "set_field", "path": ["compositional_deconstruction", "background"], "value": "updated background" }
+  ]
+}
+
+Supported operations:
+- update_element: update only the listed fields on an existing element by zero-based index.
+- add_element: insert a complete new element; omit index to append.
+- remove_element: remove an existing element by zero-based index.
+- set_field: change a non-elements field using a path array.
+
+Only edit elements or fields directly required by the user request.
+Do not include unchanged elements in update_element operations.
+Do not rewrite unrelated elements.
+If no change is needed, return { "caption_edits": [] }.
+
+Full-caption replacement is still accepted as a fallback, but edit operations are strongly preferred.
 
 Use the original image as the visual authority.
 Use the overlay image to understand the current bbox positions and labels.
 Use the current caption as the starting point.
 Preserve good existing caption content.
 Make only the changes requested by the user, plus minimal corrections needed to keep the caption valid.
-Do not rewrite the whole caption unnecessarily.
 
 All final bboxes must use the active coordinate format:
 FORMAT: {coordinate_format}
@@ -1226,10 +1249,6 @@ If adding a text element:
 - include exact visible "text"
 - include "desc"
 - do not guess unreadable letters
-
-Do not include markdown, explanation, comments, or backticks.
-Start with { and end with }.
-Return only the complete edited caption JSON.
 
 Caption schema instructions:
 {caption_schema_instructions}
