@@ -203,6 +203,58 @@
         <button id="clearStatus" title="Clear the current rating">Clear</button>
       </div>
 
+
+
+      <details class="ai-edit-panel">
+        <summary>Experimental AI Edit</summary>
+        <div class="ai-edit-body">
+          <p class="muted">Ask a running local llama.cpp-compatible loaded local vision model to edit the current caption. Images are sent only to the configured backend URL.</p>
+          <label class="fld">Edit request
+            <textarea id="aiEditRequest" rows="3" placeholder="Add bboxes for Ashe's hood and hands." spellcheck="false"></textarea>
+          </label>
+          <div class="setup-row">
+            <button id="aiAskBtn" class="primary">Ask local model</button>
+            <button id="aiApplyBtn" class="hidden">Apply AI result</button>
+            <button id="aiDiscardBtn" class="hidden">Discard AI result</button>
+          </div>
+          <div id="aiStatus" class="raw-status"></div>
+          <div id="aiRemoteWarning" class="notice warn hidden">Warning: this backend URL is not localhost/127.0.0.1. Images will be sent to that configured address.</div>
+          <div id="aiDiff" class="ai-diff hidden"></div>
+          <details class="setup">
+            <summary>AI settings</summary>
+            <div class="setup-body compact">
+              <label class="inline"><input type="checkbox" id="aiEnabled" checked> enabled</label>
+              <label class="fld">Base URL <input id="aiBaseUrl" value="http://localhost:8080" spellcheck="false"></label>
+              <label class="fld">Endpoint path <input id="aiEndpointPath" value="/v1/chat/completions" spellcheck="false"></label>
+              <label class="fld">Model <input id="aiModel" value="local-model" spellcheck="false"></label>
+              <div class="fld-grid three">
+                <label class="fld">Max tokens <input id="aiMaxTokens" type="number" value="8192" min="1"></label>
+                <label class="fld">Temperature <input id="aiTemperature" type="number" value="0.1" min="0" max="2" step="0.05"></label>
+                <label class="fld">Timeout sec <input id="aiTimeout" type="number" value="120" min="1"></label>
+              </div>
+              <label class="inline"><input type="checkbox" id="aiSendOriginal" checked> send original image</label>
+              <label class="inline"><input type="checkbox" id="aiSendOverlay" checked> send bbox overlay image</label>
+              <label class="inline"><input type="checkbox" id="aiAutoApply"> apply automatically if valid</label>
+              <label class="fld">Overlay max size <input id="aiOverlayMax" type="number" value="1400" min="256"></label>
+              <label class="inline"><input type="checkbox" id="aiIncludeRawJson" checked> include raw JSON</label>
+              <label class="inline"><input type="checkbox" id="aiIncludePrettyJson" checked> include pretty JSON</label>
+              <label class="inline"><input type="checkbox" id="aiIncludePromptTemplate" checked> include current prompt template</label>
+            </div>
+          </details>
+          <details class="setup">
+            <summary>Prompt template</summary>
+            <div class="setup-body">
+              <textarea id="aiPromptTemplate" rows="15" spellcheck="false"></textarea>
+              <button id="aiResetPromptBtn" class="mini">Reset prompt template</button>
+            </div>
+          </details>
+          <details id="aiRawWrap" class="setup hidden">
+            <summary>Raw model response</summary>
+            <textarea id="aiRawResponse" rows="8" readonly spellcheck="false"></textarea>
+          </details>
+        </div>
+      </details>
+
       <div class="tabs">
         <button id="tabFieldsBtn" class="tab active" title="Edit caption in friendly fields">Fields</button>
         <button id="tabRawBtn" class="tab" title="Edit the caption JSON directly">Raw JSON</button>

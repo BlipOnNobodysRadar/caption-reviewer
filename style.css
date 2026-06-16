@@ -459,3 +459,11 @@ body.dirty .active-name::after {
   content: " *";
   color: var(--warn);
 }
+
+.ai-edit-panel { border: 1px solid #2a3144; border-radius: 10px; margin: 10px 0 14px; background: #111622; }
+.ai-edit-panel > summary { cursor: pointer; padding: 10px 12px; font-weight: 700; }
+.ai-edit-body { padding: 0 12px 12px; display: grid; gap: 9px; }
+.ai-edit-body .compact { gap: 7px; }
+.ai-diff { border: 1px solid #2a3144; border-radius: 8px; padding: 8px; background: #0c1019; color: #d7def5; font-size: 12px; white-space: pre-wrap; }
+.fld-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#aiRawResponse, #aiPromptTemplate { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
