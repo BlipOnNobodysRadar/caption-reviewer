@@ -376,9 +376,23 @@ def normalize_ai_edit_ops(obj: Any) -> tuple[list[dict[str, Any]] | None, str | 
     if not isinstance(ops, list):
         return None, "Model response did not contain caption_edits/edits operations."
     out = []
+    op_names = {"update_element", "add_element", "remove_element", "set_field", "update", "add", "remove", "set"}
     for i, op in enumerate(ops):
         if not isinstance(op, dict):
             return None, f"Edit operation {i + 1} is not an object."
+        if "op" not in op and "type" not in op:
+            op_keys = [key for key in op.keys() if key in op_names]
+            if len(op_keys) == 1:
+                key = op_keys[0]
+                value = op[key]
+                if key in ("add", "add_element") and isinstance(value, dict):
+                    op = {"op": "add_element", "element": value}
+                elif key in ("update", "update_element") and isinstance(value, dict):
+                    op = {"op": "update_element", **value}
+                elif key in ("remove", "remove_element"):
+                    op = {"op": "remove_element", "index": value if isinstance(value, int) else (value or {}).get("index") if isinstance(value, dict) else value}
+                elif key in ("set", "set_field") and isinstance(value, dict):
+                    op = {"op": "set_field", **value}
         out.append(op)
     return out, None
 

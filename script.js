@@ -1213,6 +1213,8 @@ Preferred targeted-operations response format:
   ]
 }
 
+Compact keyed operation objects are also accepted, for example { "add_element": { "type": "obj", "bbox": [y_min, x_min, y_max, x_max], "desc": "new object" } }.
+
 Supported operations:
 - update_element: update only the listed fields on an existing element by zero-based index.
 - add_element: insert a complete new element; omit index to append.
