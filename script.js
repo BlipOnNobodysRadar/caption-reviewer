@@ -1230,6 +1230,7 @@ const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiInclu
 const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn');
 let pendingAiCaption = null;
 let pendingAiBeforeCaption = null;
+let pendingAiOps = null;
 let aiOverlayState = { before: null, after: null, scale: 1, ox: 0, oy: 0, drag: null };
 
 function aiSettingsFromUi() {
@@ -1432,6 +1433,106 @@ function drawAiPreview(canvas, caption) {
   pctx.drawImage(img, ox, oy, img.naturalWidth * scale, img.naturalHeight * scale);
   drawCaptionOverlayAt(pctx, caption, { ox, oy, scale, width: cssW, height: cssH });
 }
+function parseAiOpsFromRaw(raw) {
+  let text = String(raw || '').trim();
+  if (!text) return null;
+  if (text.startsWith('```')) {
+    const lines = text.split(/\r?\n/);
+    if (lines.length >= 3 && ['```', '```json'].includes(lines[0].trim().toLowerCase()) && lines[lines.length - 1].trim() === '```') {
+      text = lines.slice(1, -1).join('\n').trim();
+    }
+  }
+  let obj = null;
+  try { obj = JSON.parse(text); } catch (e) { return null; }
+  const ops = obj && (obj.caption_edits || obj.edits || obj.operations);
+  return Array.isArray(ops) ? ops.map(normalizeClientAiOp).filter(Boolean) : null;
+}
+function normalizeClientAiOp(op) {
+  if (!op || typeof op !== 'object' || Array.isArray(op)) return null;
+  if (op.op || op.type) return Object.assign({}, op, { op: String(op.op || op.type || '').toLowerCase() });
+  const keys = ['update_element', 'add_element', 'remove_element', 'set_field', 'update', 'add', 'remove', 'set'].filter((k) => Object.prototype.hasOwnProperty.call(op, k));
+  if (keys.length !== 1) return null;
+  const key = keys[0], value = op[key];
+  if ((key === 'add' || key === 'add_element') && value && typeof value === 'object') return { op: 'add_element', element: cloneJson(value) };
+  if ((key === 'update' || key === 'update_element') && value && typeof value === 'object') return Object.assign({ op: 'update_element' }, cloneJson(value));
+  if (key === 'remove' || key === 'remove_element') return { op: 'remove_element', index: Number.isInteger(value) ? value : value && value.index };
+  if ((key === 'set' || key === 'set_field') && value && typeof value === 'object') return Object.assign({ op: 'set_field' }, cloneJson(value));
+  return null;
+}
+function summarizeAiOps(ops) {
+  const counts = { add: 0, update: 0, remove: 0, set: 0 };
+  for (const op of ops || []) {
+    const kind = String(op.op || '').toLowerCase();
+    if (kind.includes('add')) counts.add++;
+    else if (kind.includes('update') || kind.includes('modify')) counts.update++;
+    else if (kind.includes('remove') || kind.includes('delete')) counts.remove++;
+    else if (kind.includes('set')) counts.set++;
+  }
+  const lines = [];
+  if (counts.add) lines.push(`Added ${counts.add} element(s).`);
+  if (counts.update) lines.push(`Updated ${counts.update} element(s).`);
+  if (counts.remove) lines.push(`Removed ${counts.remove} element(s).`);
+  if (counts.set) lines.push(`Changed ${counts.set} non-element field(s).`);
+  return lines.length ? lines.join('\n') : 'No edit operations returned.';
+}
+function renderAiChangeListFromOps(before, ops) {
+  aiChangeList.innerHTML = '';
+  const beforeEls = (before && C.getElements(before)) || [];
+  const addItem = (key, title, detail, checked = true) => {
+    const label = document.createElement('label');
+    label.className = 'ai-change-item';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = checked; cb.dataset.changeKey = key;
+    const body = document.createElement('span');
+    body.innerHTML = `${escapeText(title)}${detail ? `<span class="muted ai-change-detail">${escapeText(detail)}</span>` : ''}`;
+    label.append(cb, body);
+    aiChangeList.appendChild(label);
+  };
+  (ops || []).forEach((op, i) => {
+    const key = 'op-' + i;
+    const kind = String(op.op || '').toLowerCase();
+    if (kind === 'add' || kind === 'add_element') addItem(key, `Add ${aiElementLabel(op.element, beforeEls.length + i)}`, `bbox=${JSON.stringify(op.element && op.element.bbox)}`);
+    else if (kind === 'update' || kind === 'update_element' || kind === 'modify_element') addItem(key, `Update ${aiElementLabel(beforeEls[op.index], op.index)}`, Object.entries(op.fields || {}).map(([k, v]) => `${k}: ${JSON.stringify(beforeEls[op.index] && beforeEls[op.index][k])} → ${JSON.stringify(v)}`).join('\n'));
+    else if (kind === 'remove' || kind === 'remove_element' || kind === 'delete_element') addItem(key, `Remove ${aiElementLabel(beforeEls[op.index], op.index)}`, `index=${op.index}`);
+    else if (kind === 'set' || kind === 'set_field') addItem(key, `Set ${Array.isArray(op.path) ? op.path.join('.') : op.path}`, `value=${JSON.stringify(op.value)}`);
+  });
+  if (!aiChangeList.children.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'No edit operations detected.';
+    aiChangeList.appendChild(empty);
+  }
+}
+function mergeSelectedAiOps(before, ops) {
+  const selected = selectedAiChangeKeys();
+  const merged = cloneJson(before);
+  const elems = C.getElements(merged, { create: true });
+  const removals = [];
+  (ops || []).forEach((op, i) => {
+    if (!selected.has('op-' + i)) return;
+    const kind = String(op.op || '').toLowerCase();
+    if ((kind === 'add' || kind === 'add_element') && op.element) {
+      const at = Number.isInteger(op.index) ? Math.max(0, Math.min(elems.length, op.index)) : elems.length;
+      elems.splice(at, 0, cloneJson(op.element));
+    } else if ((kind === 'update' || kind === 'update_element' || kind === 'modify_element') && Number.isInteger(op.index) && elems[op.index] && op.fields) {
+      Object.assign(elems[op.index], cloneJson(op.fields));
+    } else if ((kind === 'remove' || kind === 'remove_element' || kind === 'delete_element') && Number.isInteger(op.index)) {
+      removals.push(op.index);
+    } else if ((kind === 'set' || kind === 'set_field') && op.path) {
+      const parts = Array.isArray(op.path) ? op.path : String(op.path).split('.').filter(Boolean);
+      if (!parts.includes('elements')) {
+        let cur = merged;
+        for (const part of parts.slice(0, -1)) {
+          if (!cur[part] || typeof cur[part] !== 'object') cur[part] = {};
+          cur = cur[part];
+        }
+        cur[parts[parts.length - 1]] = cloneJson(op.value);
+      }
+    }
+  });
+  for (const idx of [...new Set(removals)].sort((a, b) => b - a)) if (idx >= 0 && idx < elems.length) elems.splice(idx, 1);
+  return merged;
+}
 function renderAiChangeList(before, after) {
   aiChangeList.innerHTML = '';
   const addItem = (key, title, detail, checked = true) => {
@@ -1515,9 +1616,10 @@ function zoomAiOverlay(factor, center) {
   aiOverlayState.oy = p.y - iy * aiOverlayState.scale;
   drawAiOverlayModal();
 }
-function renderAiReview(before, after) {
+function renderAiReview(before, after, ops = null) {
   if (!before || !after) { aiReview.classList.add('hidden'); return; }
-  renderAiChangeList(before, after);
+  if (ops && ops.length) renderAiChangeListFromOps(before, ops);
+  else renderAiChangeList(before, after);
   aiReview.classList.remove('hidden');
   requestAnimationFrame(() => { drawAiPreview(aiBeforeCanvas, before); drawAiPreview(aiAfterCanvas, after); });
 }
@@ -1535,14 +1637,14 @@ function applyAiCaption(caption) {
 }
 function applySelectedAiChanges() {
   if (!pendingAiCaption) return;
-  applyAiCaption(mergeSelectedAiCaption(pendingAiBeforeCaption, pendingAiCaption));
+  applyAiCaption(pendingAiOps && pendingAiOps.length ? mergeSelectedAiOps(pendingAiBeforeCaption, pendingAiOps) : mergeSelectedAiCaption(pendingAiBeforeCaption, pendingAiCaption));
 }
 async function askAiEdit() {
   if (!aiEnabled.checked) { aiStatus.textContent = 'AI Edit is disabled.'; aiStatus.className = 'raw-status error'; return; }
   if (!activeRel || !doc) { aiStatus.textContent = 'Open a structured caption first.'; aiStatus.className = 'raw-status error'; return; }
   const reqText = aiEditRequest.value.trim();
   if (!reqText) { aiStatus.textContent = 'Enter an edit request.'; aiStatus.className = 'raw-status error'; return; }
-  updateAiRemoteWarning(); saveAiPrefs(); pendingAiCaption = null; pendingAiBeforeCaption = null;
+  updateAiRemoteWarning(); saveAiPrefs(); pendingAiCaption = null; pendingAiBeforeCaption = null; pendingAiOps = null;
   aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiRawWrap.classList.add('hidden'); aiReview.classList.add('hidden');
   aiAskBtn.disabled = true; aiStatus.textContent = 'Asking local model…'; aiStatus.className = 'raw-status';
   const before = cloneJson(doc);
@@ -1561,12 +1663,13 @@ async function askAiEdit() {
     if (!out.ok) throw new Error(out.error || 'AI edit failed.');
     pendingAiCaption = out.caption;
     pendingAiBeforeCaption = before;
+    pendingAiOps = out.debug && out.debug.response_mode === 'ops' ? parseAiOpsFromRaw(out.raw_model_response) : null;
     const modeLabel = out.debug && out.debug.response_mode ? ` (${out.debug.response_mode})` : '';
     aiStatus.textContent = (out.validation && out.validation.valid ? 'Received valid AI-edited caption' : 'Received AI result') + modeLabel + '.';
     aiStatus.className = 'raw-status ok';
-    aiDiff.textContent = summarizeAiDiff(before, pendingAiCaption);
+    aiDiff.textContent = pendingAiOps && pendingAiOps.length ? summarizeAiOps(pendingAiOps) : summarizeAiDiff(before, pendingAiCaption);
     aiDiff.classList.remove('hidden');
-    renderAiReview(before, pendingAiCaption);
+    renderAiReview(before, pendingAiCaption, pendingAiOps);
     aiDiscardBtn.classList.remove('hidden');
     if (aiAutoApply.checked) applyAiCaption(pendingAiCaption);
     else aiApplyBtn.classList.remove('hidden');
@@ -1579,7 +1682,7 @@ async function askAiEdit() {
 }
 aiAskBtn.addEventListener('click', askAiEdit);
 aiApplyBtn.addEventListener('click', () => { applySelectedAiChanges(); aiApplyBtn.classList.add('hidden'); });
-aiDiscardBtn.addEventListener('click', () => { pendingAiCaption = null; pendingAiBeforeCaption = null; aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiReview.classList.add('hidden'); aiStatus.textContent = 'AI result discarded.'; });
+aiDiscardBtn.addEventListener('click', () => { pendingAiCaption = null; pendingAiBeforeCaption = null; pendingAiOps = null; aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiReview.classList.add('hidden'); aiStatus.textContent = 'AI result discarded.'; });
 aiSelectAllBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = true; });
 aiSelectNoneBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = false; });
 aiBeforeCanvas.addEventListener('click', openAiOverlayModal);
