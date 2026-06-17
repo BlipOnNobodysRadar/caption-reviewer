@@ -1191,87 +1191,30 @@ convertBtn.addEventListener('click', () => {
 });
 
 /* ---------------- experimental AI edit ---------------- */
-const DEFAULT_AI_PROMPT_TEMPLATE = `You are editing an Ideogram 4 structured JSON caption for an image dataset.
-
-You will receive:
-1. The original image.
-2. An overlay image with current bounding boxes and labels.
-3. The current caption JSON.
-4. A user edit request.
+const DEFAULT_AI_PROMPT_TEMPLATE = `You edit Ideogram4 structured caption JSON for one image.
 
 {response_format_instructions}
 
-Return raw JSON only, with no markdown, comments, explanation, or backticks.
+Visual inputs:
+- original image = visual truth
+- overlay image = current boxes/labels to fix or reference
 
-Preferred targeted-operations response format:
-{
-  "caption_edits": [
-    { "op": "update_element", "index": 0, "fields": { "bbox": [y_min, x_min, y_max, x_max], "desc": "updated description" } },
-    { "op": "add_element", "index": 3, "element": { "type": "obj", "bbox": [y_min, x_min, y_max, x_max], "desc": "new object" } },
-    { "op": "remove_element", "index": 2 },
-    { "op": "set_field", "path": ["compositional_deconstruction", "background"], "value": "updated background" }
-  ]
-}
+Rules:
+- Make only the requested change; preserve unrelated content.
+- Use active bbox format {coordinate_format}, max {coordinate_max}.
+- For new obj elements include type, bbox, desc, and color_palette only if useful.
+- For text elements include type="text", bbox, exact visible text, and desc; do not guess unreadable letters.
 
-Compact keyed operation objects are also accepted, for example { "add_element": { "type": "obj", "bbox": [y_min, x_min, y_max, x_max], "desc": "new object" } }.
-
-Supported operations:
-- update_element: update only the listed fields on an existing element by zero-based index.
-- add_element: insert a complete new element; omit index to append.
-- remove_element: remove an existing element by zero-based index.
-- set_field: change a non-elements field using a path array.
-
-Only edit elements or fields directly required by the user request.
-Do not include unchanged elements in update_element operations.
-Do not rewrite unrelated elements.
-If no change is needed, return { "caption_edits": [] }.
-
-Full-caption replacement is still accepted as a fallback, but edit operations are strongly preferred.
-
-Use the original image as the visual authority.
-Use the overlay image to understand the current bbox positions and labels.
-Use the current caption as the starting point.
-Preserve good existing caption content.
-Make only the changes requested by the user, plus minimal corrections needed to keep the caption valid.
-
-All final bboxes must use the active coordinate format:
-FORMAT: {coordinate_format}
-MAX: {coordinate_max}
-
-For Ideogram default, bboxes are [y_min, x_min, y_max, x_max] normalized from 0 to 1000.
-
-If adding a new object element:
-- use "type": "obj"
-- include "bbox"
-- include "desc"
-- include "color_palette" only if useful
-
-If adding a text element:
-- use "type": "text"
-- include "bbox"
-- include exact visible "text"
-- include "desc"
-- do not guess unreadable letters
-
-Caption schema instructions:
-{caption_schema_instructions}
-
-Current filename:
-{filename}
-
-Selected element:
-{selected_element_summary}
-
-Current elements:
+Filename: {filename}
+Selected element: {selected_element_summary}
+Elements:
 {element_summaries}
+Validation issues: {validation_issues}
 
 Current caption JSON:
 {current_caption_json}
 
-Current validation issues:
-{validation_issues}
-
-User edit request:
+User request:
 {user_request}`;
 
 const aiEditRequest = $('aiEditRequest'), aiAskBtn = $('aiAskBtn'), aiApplyBtn = $('aiApplyBtn'), aiDiscardBtn = $('aiDiscardBtn');
@@ -1346,16 +1289,17 @@ function initAiPrefs() {
 }
 function aiResponseFormatInstructions() {
   if (aiResponseMode.value === 'full') {
-    return `IMPORTANT RESPONSE FORMAT OVERRIDE:
-Return one complete edited caption JSON object and nothing else.
-Preserve unrelated caption content exactly unless a requested edit requires changing it.`;
+    return `IMPORTANT RESPONSE FORMAT:
+Return ONLY one JSON object. First character must be { and last must be }.
+Do not use markdown, code fences, comments, or explanation.
+Return a complete edited caption JSON object. Preserve unrelated content.`;
   }
-  return `IMPORTANT RESPONSE FORMAT OVERRIDE:
-Prefer targeted edit operations instead of a full caption replacement.
-Return raw JSON like {"caption_edits":[...]} and include only operations needed for the user's request.
-Use update_element/add_element/remove_element/set_field operations.
-Do not include unchanged or unrelated elements in update_element operations.
-A full caption JSON object is accepted only as a fallback if operations are insufficient.`;
+  return `IMPORTANT RESPONSE FORMAT:
+Return ONLY one JSON object. First character must be { and last must be }.
+Do not use markdown, code fences, comments, or explanation.
+Prefer {"caption_edits":[...]} with only requested changes.
+Use update_element/add_element/remove_element/set_field. Do not include unchanged or unrelated elements.
+Full caption JSON is accepted only as a fallback.`;
 }
 function aiPromptForRequest() {
   const base = aiPromptTemplate.value || DEFAULT_AI_PROMPT_TEMPLATE;

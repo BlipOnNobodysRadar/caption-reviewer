@@ -339,8 +339,16 @@ def parse_ai_json_response(text: str) -> tuple[Any | None, str | None]:
     stripped = (text or "").strip()
     if not stripped:
         return None, "Model response was empty."
+    # Accept a single harmless fenced JSON block, because local models often add
+    # ```json despite being instructed not to. Reject mixed prose + fences.
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[0].strip().lower() in ("```", "```json") and lines[-1].strip() == "```":
+            stripped = "\n".join(lines[1:-1]).strip()
+        else:
+            return None, "Model response used markdown/code fences around non-isolated JSON; expected raw JSON only."
     if "```" in stripped:
-        return None, "Model response used markdown/code fences; expected raw JSON only."
+        return None, "Model response included extra markdown/code fences; expected one JSON object only."
     try:
         return json.loads(stripped), None
     except Exception as exc:
