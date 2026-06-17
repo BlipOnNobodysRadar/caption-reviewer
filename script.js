@@ -1201,7 +1201,11 @@ Visual inputs:
 
 Rules:
 - Make only the requested change; preserve unrelated content.
-- Use active bbox format {coordinate_format}, max {coordinate_max}.
+- Bboxes are normalized grid coordinates, not pixels and not center/width/height.
+- Active bbox format is {coordinate_format}, max {coordinate_max}; for Ideogram default this is [y_min, x_min, y_max, x_max].
+- y values are vertical: top→bottom. x values are horizontal: left→right. Clamp to 0–{coordinate_max}; require y_min < y_max and x_min < x_max.
+- If estimating from pixel xyxy, convert by image dimensions first: y=round(pixel_y/image_height*{coordinate_max}), x=round(pixel_x/image_width*{coordinate_max}), then output yxyx.
+- Tight boxes are better than broad boxes; omit uncertain/diffuse boxes rather than guessing.
 - For new obj elements include type, bbox, desc, and color_palette only if useful.
 - For text elements include type="text", bbox, exact visible text, and desc; do not guess unreadable letters.
 

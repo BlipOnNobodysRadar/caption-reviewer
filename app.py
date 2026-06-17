@@ -190,13 +190,13 @@ def backup_original_caption(root: Path, caption_path: Path) -> Path | None:
     return dest
 
 
-AI_EDIT_SCHEMA_INSTRUCTIONS = """Required Ideogram4 structured caption shape:
-- top-level JSON object
-- style_description object
-- compositional_deconstruction object with elements array
-- each element type is obj or text
-- bbox values are four finite numbers in the active coordinate format/range
-- text elements include a text field
+AI_EDIT_SCHEMA_INSTRUCTIONS = """Ideogram4 caption essentials:
+- Top-level object has high_level_description, style_description, compositional_deconstruction.background, and compositional_deconstruction.elements.
+- Elements are obj or text. obj needs desc. text needs exact visible text and desc.
+- Bboxes, when present, are normalized grid coordinates, not pixels. Default Ideogram order is [y_min, x_min, y_max, x_max].
+- y is vertical top/bottom; x is horizontal left/right. Values must be integers in 0-1000 with positive area.
+- Tight accurate boxes are better than broad boxes; omit uncertain or diffuse boxes.
+- Use color_palette with uppercase #RRGGBB only when useful.
 Unknown existing fields may be preserved when they are still valid JSON.
 """
 
@@ -257,7 +257,7 @@ def element_summary(el: Any, index: int) -> str:
         return f"{index + 1}: invalid element"
     desc = str(el.get("desc") or el.get("description") or el.get("text") or "")
     desc = " ".join(desc.split())[:120]
-    return f"{index + 1} {el.get('type', 'obj')}: bbox={el.get('bbox')} desc={desc}"
+    return f"{index + 1} {el.get('type', 'obj')}: bbox_ideogram_yxyx={el.get('bbox')} desc={desc}"
 
 
 def render_caption_overlay(image_path: Path, caption: dict[str, Any], coordinate_format: str, coordinate_max: int, max_size: int) -> bytes:
