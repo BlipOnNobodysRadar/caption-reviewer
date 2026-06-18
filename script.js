@@ -1535,7 +1535,7 @@ const aiOverlayModal = $('aiOverlayModal'), aiOverlayBeforeCanvas = $('aiOverlay
 const aiOverlayZoomOut = $('aiOverlayZoomOut'), aiOverlayZoomIn = $('aiOverlayZoomIn'), aiOverlayFit = $('aiOverlayFit'), aiOverlayClose = $('aiOverlayClose'), aiOverlayZoomLabel = $('aiOverlayZoomLabel');
 const aiEnabled = $('aiEnabled'), aiBaseUrl = $('aiBaseUrl'), aiEndpointPath = $('aiEndpointPath'), aiModel = $('aiModel'), aiResponseMode = $('aiResponseMode');
 const aiMaxTokens = $('aiMaxTokens'), aiTemperature = $('aiTemperature'), aiTimeout = $('aiTimeout'), aiSendOriginal = $('aiSendOriginal');
-const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiOverlayMax = $('aiOverlayMax');
+const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiSaveTraining = $('aiSaveTraining'), aiOverlayMax = $('aiOverlayMax');
 const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiIncludePrettyJson'), aiIncludePromptTemplate = $('aiIncludePromptTemplate');
 const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn');
 const aiBatchParallel = $('aiBatchParallel'), aiBatchReviewMode = $('aiBatchReviewMode'), aiBatchScope = $('aiBatchScope');
@@ -1562,6 +1562,7 @@ function aiSettingsFromUi() {
     include_raw_json: aiIncludeRawJson.checked,
     include_pretty_json: aiIncludePrettyJson.checked,
     include_current_prompt_template: aiIncludePromptTemplate.checked,
+    save_training_data: aiSaveTraining.checked,
   };
 }
 function isLocalAiUrl() {
@@ -1576,7 +1577,7 @@ function saveAiPrefs() {
   p.ai = {
     enabled: aiEnabled.checked, baseUrl: aiBaseUrl.value, endpointPath: aiEndpointPath.value, model: aiModel.value,
     maxTokens: aiMaxTokens.value, temperature: aiTemperature.value, timeout: aiTimeout.value,
-    sendOriginal: aiSendOriginal.checked, sendOverlay: aiSendOverlay.checked, autoApply: aiAutoApply.checked,
+    sendOriginal: aiSendOriginal.checked, sendOverlay: aiSendOverlay.checked, autoApply: aiAutoApply.checked, saveTraining: aiSaveTraining.checked,
     overlayMax: aiOverlayMax.value, includeRawJson: aiIncludeRawJson.checked, includePrettyJson: aiIncludePrettyJson.checked,
     includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value, batchParallel: aiBatchParallel.value, batchReviewMode: aiBatchReviewMode.value, batchScope: aiBatchScope.value, batchFilter: aiBatchFilter.value
   };
@@ -1597,6 +1598,7 @@ function initAiPrefs() {
   if (typeof p.sendOriginal === 'boolean') aiSendOriginal.checked = p.sendOriginal;
   if (typeof p.sendOverlay === 'boolean') aiSendOverlay.checked = p.sendOverlay;
   if (typeof p.autoApply === 'boolean') aiAutoApply.checked = p.autoApply;
+  if (typeof p.saveTraining === 'boolean') aiSaveTraining.checked = p.saveTraining;
   if (p.overlayMax) aiOverlayMax.value = p.overlayMax;
   if (typeof p.includeRawJson === 'boolean') aiIncludeRawJson.checked = p.includeRawJson;
   if (typeof p.includePrettyJson === 'boolean') aiIncludePrettyJson.checked = p.includePrettyJson;
@@ -2073,13 +2075,13 @@ async function runAiEditForRel(rel, requestText) {
   const out = await res.json();
   if (!out.ok) {
     const details = out.validation && Array.isArray(out.validation.errors) && out.validation.errors.length ? ': ' + out.validation.errors.join('; ') : '';
-    return { rel, status: 'failed', error: (out.error || 'AI edit failed') + details, raw: out.raw_model_response || '' };
+    return { rel, status: 'failed', error: (out.error || 'AI edit failed') + details, raw: out.raw_model_response || '', training: out.training_saved || null };
   }
   const after = out.caption;
   const noChange = out.no_change || JSON.stringify(before) === JSON.stringify(after);
-  if (noChange) return { rel, status: 'nochange', before, after, summary: 'Model returned no changes.', raw: out.raw_model_response || '' };
+  if (noChange) return { rel, status: 'nochange', before, after, summary: 'Model returned no changes.' + (out.training_saved ? (out.training_saved.error ? ' Training save failed.' : ' Training example saved.') : ''), raw: out.raw_model_response || '', training: out.training_saved || null };
   const ops = out.debug && out.debug.response_mode === 'ops' ? parseAiOpsFromRaw(out.raw_model_response) : null;
-  return { rel, status: aiBatchReviewMode.value === 'auto' ? 'autosave' : 'proposed', before, after, ops, raw: out.raw_model_response || '', summary: ops && ops.length ? summarizeAiOps(ops) : summarizeAiDiff(before, after) };
+  return { rel, status: aiBatchReviewMode.value === 'auto' ? 'autosave' : 'proposed', before, after, ops, raw: out.raw_model_response || '', training: out.training_saved || null, summary: (ops && ops.length ? summarizeAiOps(ops) : summarizeAiDiff(before, after)) + (out.training_saved ? (out.training_saved.error ? '\nTraining save failed.' : '\nTraining example saved.') : '') };
 }
 async function acceptAiBatchResult(r) {
   if (!r || !r.after || (r.status !== 'proposed' && r.status !== 'autosave')) return;
@@ -2190,7 +2192,8 @@ async function askAiEdit() {
     pendingAiBeforeCaption = before;
     pendingAiOps = out.debug && out.debug.response_mode === 'ops' ? parseAiOpsFromRaw(out.raw_model_response) : null;
     const modeLabel = out.debug && out.debug.response_mode ? ` (${out.debug.response_mode})` : '';
-    aiStatus.textContent = (out.validation && out.validation.valid ? 'Received valid AI-edited caption' : 'Received AI result') + modeLabel + '.';
+    const trainingLabel = out.training_saved ? (out.training_saved.error ? ' Training save failed.' : ' Training example saved.') : '';
+    aiStatus.textContent = (out.validation && out.validation.valid ? 'Received valid AI-edited caption' : 'Received AI result') + modeLabel + '.' + trainingLabel;
     aiStatus.className = 'raw-status ok';
     aiDiff.textContent = pendingAiOps && pendingAiOps.length ? summarizeAiOps(pendingAiOps) : summarizeAiDiff(before, pendingAiCaption);
     aiDiff.classList.remove('hidden');
@@ -2236,7 +2239,7 @@ for (const modalCanvas of [aiOverlayBeforeCanvas, aiOverlayAfterCanvas]) {
 }
 aiResetPromptBtn.addEventListener('click', () => { aiPromptTemplate.value = DEFAULT_AI_PROMPT_TEMPLATE; saveAiPrefs(); });
 window.addEventListener('resize', () => { if (!aiOverlayModal.classList.contains('hidden')) drawAiOverlayModal(); });
-for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate, aiBatchParallel, aiBatchReviewMode, aiBatchScope, aiBatchFilter]) {
+for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiSaveTraining, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate, aiBatchParallel, aiBatchReviewMode, aiBatchScope, aiBatchFilter]) {
   el.addEventListener('change', () => { updateAiRemoteWarning(); saveAiPrefs(); });
   el.addEventListener('input', debounce(() => { updateAiRemoteWarning(); saveAiPrefs(); }, 300));
 }
