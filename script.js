@@ -1981,6 +1981,36 @@ function updateAiBatchControls() {
   aiBatchAcceptAll.disabled = !c.proposed;
   aiBatchRejectAll.disabled = !c.proposed;
 }
+async function waitForActiveImage(rel, timeoutMs = 5000) {
+  const start = Date.now();
+  while (activeRel === rel && !imgLoaded && Date.now() - start < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+async function openAiBatchResult(r) {
+  if (!r) return;
+  await loadItem(r.rel);
+  if (r.before && r.after) {
+    pendingAiBeforeCaption = cloneJson(r.before);
+    pendingAiCaption = cloneJson(r.after);
+    pendingAiOps = r.ops || null;
+    aiRawResponse.value = r.raw || '';
+    aiRawWrap.classList.toggle('hidden', !r.raw);
+    aiDiff.textContent = r.summary || (pendingAiOps && pendingAiOps.length ? summarizeAiOps(pendingAiOps) : summarizeAiDiff(r.before, r.after));
+    aiDiff.classList.remove('hidden');
+    aiDiscardBtn.classList.remove('hidden');
+    aiApplyBtn.classList.toggle('hidden', r.status !== 'proposed');
+    aiStatus.textContent = `Reviewing batch result for ${r.rel} (${r.status}).`;
+    aiStatus.className = r.status === 'failed' ? 'raw-status error' : 'raw-status ok';
+    await waitForActiveImage(r.rel);
+    renderAiReview(pendingAiBeforeCaption, pendingAiCaption, pendingAiOps);
+  } else {
+    pendingAiBeforeCaption = null; pendingAiCaption = null; pendingAiOps = null;
+    aiApplyBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiReview.classList.add('hidden');
+    aiStatus.textContent = r.error || r.summary || `Opened ${r.rel}.`;
+    aiStatus.className = r.status === 'failed' ? 'raw-status error' : 'raw-status';
+  }
+}
 function renderAiBatchList() {
   updateAiBatchControls();
   const c = aiBatchCounts();
@@ -2003,7 +2033,7 @@ function renderAiBatchList() {
     actions.className = 'ai-batch-actions';
     const openBtn = document.createElement('button');
     openBtn.className = 'mini'; openBtn.textContent = 'Open';
-    openBtn.addEventListener('click', () => loadItem(r.rel));
+    openBtn.addEventListener('click', () => openAiBatchResult(r));
     actions.appendChild(openBtn);
     if (r.status === 'proposed') {
       const accept = document.createElement('button');
