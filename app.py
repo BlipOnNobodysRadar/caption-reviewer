@@ -923,6 +923,20 @@ def ai_edit_caption():
     if parse_error:
         return jsonify({"ok": False, "error": parse_error, "raw_model_response": raw_model_response, "validation": {"valid": False, "errors": [parse_error]}, "debug": {"llamacpp_url": url, "overlay_generated": overlay_generated, "response_mode": response_mode}}), 422
     validation = validate_ai_caption(edited, coordinate_max)
+    if not validation["valid"] and response_mode == "ops":
+        before_validation = validate_ai_caption(caption, coordinate_max)
+        before_errors = set(before_validation.get("errors", []))
+        after_errors = set(validation.get("errors", []))
+        new_errors = sorted(after_errors - before_errors)
+        if not new_errors:
+            validation = {
+                "valid": True,
+                "warnings": [
+                    "Caption still has pre-existing validation issues unrelated to the AI edit operations.",
+                    *sorted(after_errors),
+                ],
+                "pre_existing_errors": sorted(after_errors),
+            }
     if not validation["valid"]:
         return jsonify({"ok": False, "error": "Model returned invalid caption.", "raw_model_response": raw_model_response, "validation": validation, "debug": {"llamacpp_url": url, "overlay_generated": overlay_generated, "response_mode": response_mode}}), 422
     return jsonify({"ok": True, "caption": edited, "raw_model_response": raw_model_response, "validation": validation, "debug": {"overlay_generated": overlay_generated, "llamacpp_url": url, "response_mode": response_mode}})

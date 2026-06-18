@@ -1670,7 +1670,10 @@ async function askAiEdit() {
     const out = await res.json();
     aiRawResponse.value = out.raw_model_response || '';
     aiRawWrap.classList.toggle('hidden', !out.raw_model_response);
-    if (!out.ok) throw new Error(out.error || 'AI edit failed.');
+    if (!out.ok) {
+      const details = out.validation && Array.isArray(out.validation.errors) && out.validation.errors.length ? ': ' + out.validation.errors.join('; ') : '';
+      throw new Error((out.error || 'AI edit failed') + details);
+    }
     pendingAiCaption = out.caption;
     pendingAiBeforeCaption = before;
     pendingAiOps = out.debug && out.debug.response_mode === 'ops' ? parseAiOpsFromRaw(out.raw_model_response) : null;
