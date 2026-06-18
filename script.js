@@ -782,22 +782,52 @@ function startDrawFor(i) {
 function rgbToHex(r, g, b) {
   return '#' + [r, g, b].map((n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')).join('').toUpperCase();
 }
-function sampleImageRect(rect) {
-  if (!imgLoaded || !rect || rect.width <= 0 || rect.height <= 0) return '';
+function rgbDistanceSq(a, b) {
+  const dr = a.r - b.r, dg = a.g - b.g, db = a.b - b.b;
+  return dr * dr + dg * dg + db * db;
+}
+function extractRectPixels(rect) {
+  if (!imgLoaded || !rect || rect.width <= 0 || rect.height <= 0) return null;
   const c = document.createElement('canvas');
   const w = Math.max(1, Math.round(rect.width));
   const h = Math.max(1, Math.round(rect.height));
   c.width = w; c.height = h;
   const ictx = c.getContext('2d', { willReadFrequently: true });
   ictx.drawImage(img, rect.left, rect.top, rect.width, rect.height, 0, 0, w, h);
-  const data = ictx.getImageData(0, 0, w, h).data;
-  let r = 0, g = 0, b = 0, n = 0;
-  const step = Math.max(4, Math.floor(data.length / 4000) & ~3);
-  for (let i = 0; i < data.length; i += step) {
+  return { data: ictx.getImageData(0, 0, w, h).data, w, h };
+}
+function sampleImageRectColors(rect, maxColors = 5) {
+  const pixels = extractRectPixels(rect);
+  if (!pixels) return [];
+  const { data } = pixels;
+  const bins = new Map();
+  const stride = Math.max(4, Math.floor(data.length / 16000) & ~3);
+  let total = 0;
+  for (let i = 0; i < data.length; i += stride) {
     if (data[i + 3] < 8) continue;
-    r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
+    total++;
+    const qr = data[i] >> 4, qg = data[i + 1] >> 4, qb = data[i + 2] >> 4;
+    const key = `${qr},${qg},${qb}`;
+    const bin = bins.get(key) || { r: 0, g: 0, b: 0, count: 0 };
+    bin.r += data[i]; bin.g += data[i + 1]; bin.b += data[i + 2]; bin.count++;
+    bins.set(key, bin);
   }
-  return n ? rgbToHex(r / n, g / n, b / n) : '';
+  if (!total) return [];
+  const candidates = Array.from(bins.values())
+    .map((bin) => ({ r: bin.r / bin.count, g: bin.g / bin.count, b: bin.b / bin.count, count: bin.count }))
+    .filter((bin) => bin.count / total >= 0.015)
+    .sort((a, b) => b.count - a.count);
+  const picked = [];
+  const minDistanceSq = 34 * 34;
+  for (const c of candidates) {
+    if (picked.every((p) => rgbDistanceSq(p, c) >= minDistanceSq)) picked.push(c);
+    if (picked.length >= maxColors) break;
+  }
+  if (!picked.length && candidates.length) picked.push(candidates[0]);
+  return picked.map((c) => rgbToHex(c.r, c.g, c.b));
+}
+function sampleImageRect(rect) {
+  return sampleImageRectColors(rect, 1)[0] || '';
 }
 function colorAtCanvasPoint(p) {
   if (!imgLoaded || !p) return '';
@@ -809,16 +839,16 @@ function autofillPaletteForIndex(i) {
   const el = elements()[i];
   if (!el || !Array.isArray(el.bbox)) return false;
   const rect = rectOf(i);
-  const hex = sampleImageRect(rect);
-  if (!hex) return false;
-  setElementPalette(i, [hex]);
+  const colors = sampleImageRectColors(rect, 5);
+  if (!colors.length) return false;
+  setElementPalette(i, colors);
   return true;
 }
 function autofillSelectedPalette() {
   if (selectedIdx < 0) { setMessage('Select an element with a bbox before autofilling its palette.', true); return; }
   pushUndoMaybe();
   if (!autofillPaletteForIndex(selectedIdx)) { setMessage('Selected element has no usable bbox to sample.', true); return; }
-  markDirty(); renderElements(); draw(); setMessage('Palette autofilled from selected bbox.');
+  markDirty(); renderElements(); draw(); setMessage('Palette autofilled with distinct colors from selected bbox.');
 }
 function autofillAllPalettes() {
   if (!doc) return;
@@ -826,7 +856,7 @@ function autofillAllPalettes() {
   let n = 0;
   elements().forEach((_, i) => { if (autofillPaletteForIndex(i)) n++; });
   if (!n) { setMessage('No element bboxes were available to sample.', true); return; }
-  markDirty(); renderElements(); draw(); setMessage(`Autofilled ${n} palette${n === 1 ? '' : 's'} from bboxes.`);
+  markDirty(); renderElements(); draw(); setMessage(`Autofilled ${n} palette${n === 1 ? '' : 's'} with distinct bbox colors.`);
 }
 function stripSelectedPalette() {
   const el = elements()[selectedIdx];
