@@ -501,3 +501,10 @@ body.dirty .active-name::after {
 .ai-batch-item.st-failed { border-color: #7a3a3a; }
 .ai-batch-item.st-rejected { opacity: .72; }
 .ai-batch-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+/* Keep AI batch content constrained inside the editor drawer, even for long filenames/errors. */
+#editorDrawer, #editorDrawer .drawer-body, #editorDrawer .setup, #editorDrawer .setup-body, .ai-edit-panel { min-width: 0; }
+#aiBatchStatus { white-space: normal; overflow-wrap: anywhere; }
+.ai-batch-list { min-width: 0; overflow-x: hidden; }
+.ai-batch-item { min-width: 0; max-width: 100%; overflow: hidden; }
+.ai-batch-item > div { min-width: 0; overflow-wrap: anywhere; }
+.ai-batch-item strong { overflow-wrap: anywhere; word-break: break-word; }
