@@ -28,6 +28,8 @@ const fldHld = $('fld_hld'), fldAesthetics = $('fld_aesthetics'), fldLighting = 
 const fldArt = $('fld_art'), fldMedium = $('fld_medium'), fldStylePalette = $('fld_stylePalette');
 const fldBackground = $('fld_background');
 const elementsCount = $('elementsCount'), elementsList = $('elementsList');
+const autofillPaletteBtn = $('autofillPalette'), pickPaletteBtn = $('pickPalette'), stripPaletteBtn = $('stripPalette'), stripAllPalettesBtn = $('stripAllPalettes');
+const batchAutofillPalettesBtn = $('batchAutofillPalettes'), batchRepairJsonBtn = $('batchRepairJson');
 const captionText = $('captionText'), captionPath = $('captionPath');
 const rawApplyBtn = $('rawApplyBtn'), repairJsonBtn = $('repairJsonBtn'), rawStatus = $('rawStatus');
 const saveFormat = $('saveFormat'), saveCaptionBtn = $('saveCaption'), saveFixedBtn = $('saveFixed');
@@ -46,7 +48,7 @@ let items = [], activeRel = null, activeIndex = -1;
 let originalText = '';
 let doc = null, plain = false, parseError = null, parseRepaired = false, parseRepairKind = "";
 let selectedIdx = -1, hoverIdx = -1;
-let mode = 'select';            // 'select' | 'draw'
+let mode = 'select';            // 'select' | 'draw' | 'pickColor'
 let drawSticky = false;         // B key keeps draw mode after one box
 let pendingDrawIdx = null;      // next drawn rect goes to this element
 let dirty = false, rawDirtyPending = false;
@@ -54,6 +56,8 @@ let activeTab = 'fields';
 let view = { scale: 1, ox: 0, oy: 0 };
 let img = new Image(), imgLoaded = false;
 let drag = null, spaceHeld = false, lastPointer = null, lastKeyWasArrow = false;
+let colorPickIdx = null;
+let manualPaletteBboxes = new Set();
 let undoStack = [], redoStack = [];
 
 /* recent folders + last-session restore (persisted in localStorage prefs) */
@@ -87,6 +91,16 @@ function debounce(fn, ms) {
 function order() { return bboxFormat.value === 'xyxy' ? 'xyxy' : 'yxyx'; }
 function coordMax() { return Math.max(1, Number(bboxCoordMax.value) || 1000); }
 function elements() { return (doc && C.getElements(doc)) || []; }
+function paletteBboxKey(el) {
+  if (!el || !Array.isArray(el.bbox) || el.bbox.length !== 4) return '';
+  const norm = C.normalizeBbox(el.bbox, coordMax()) || el.bbox;
+  return `${order()}|${coordMax()}|${norm.map((v) => Number(v)).join(',')}`;
+}
+function markPaletteManual(i) {
+  const key = paletteBboxKey(elements()[i]);
+  if (key) manualPaletteBboxes.add(key);
+}
+function manualPaletteList() { return Array.from(manualPaletteBboxes).sort(); }
 function updateDirtyUi() {
   document.body.classList.toggle('dirty', dirty);
   renderList(false);
@@ -365,10 +379,14 @@ function promptJumpToIndex() {
   if (Number.isFinite(n)) jumpToVisibleIndex(Math.round(n) - 1);
 }
 
-async function loadCaptionForRel(rel) {
+async function loadItemDataForRel(rel) {
   const res = await fetch('/api/item?rel=' + encodeURIComponent(rel));
   const out = await res.json();
   if (out.error) throw new Error(out.error);
+  return out;
+}
+async function loadCaptionForRel(rel) {
+  const out = await loadItemDataForRel(rel);
   return out.caption || '';
 }
 async function moveToNextProblem(kind) {
@@ -460,6 +478,7 @@ async function loadItem(rel) {
   renderList(true);
   updateButtons(out.status);
 
+  manualPaletteBboxes = new Set(Array.isArray(out.meta && out.meta.manual_palette_bboxes) ? out.meta.manual_palette_bboxes : []);
   setCaptionState(out.caption || '');
   dirty = false; updateDirtyUi();
   setMessage(parseRepaired ? `Loaded with JSON repair${parseRepairKind ? ` (${parseRepairKind})` : ""}.` : '');
@@ -509,6 +528,50 @@ function paletteToText(v) { return Array.isArray(v) ? v.join(', ') : (v == null 
 function textToPalette(s) {
   return s.split(',').map((x) => x.trim()).filter(Boolean);
 }
+function isHexColor(v) { return /^#[0-9a-f]{6}$/i.test(String(v || '').trim()); }
+function normalizeHex(v) { return isHexColor(v) ? String(v).trim().toUpperCase() : ''; }
+function renderPaletteChips(values, owner, onRemove) {
+  const wrap = document.createElement('div');
+  wrap.className = 'palette-chips';
+  const vals = Array.isArray(values) ? values : textToPalette(values == null ? '' : String(values));
+  vals.forEach((raw, idx) => {
+    const hex = normalizeHex(raw);
+    if (!hex) return;
+    const chip = document.createElement(owner ? 'button' : 'span');
+    chip.className = 'palette-swatch';
+    chip.style.background = hex;
+    chip.title = hex + (owner ? ' — click to remove' : '');
+    chip.setAttribute('aria-label', hex);
+    if (owner) chip.addEventListener('click', (ev) => { ev.stopPropagation(); onRemove(idx); });
+    wrap.appendChild(chip);
+  });
+  return wrap;
+}
+function cleanPaletteValues(values) {
+  const out = [];
+  for (const v of values) {
+    const clean = normalizeHex(v) || String(v).trim();
+    if (clean && !out.includes(clean)) out.push(clean);
+  }
+  return out;
+}
+function setElementPalette(i, values) {
+  const el = elements()[i];
+  if (!el) return;
+  const clean = cleanPaletteValues(values);
+  if (clean.length) el.color_palette = clean;
+  else delete el.color_palette;
+}
+function addElementPaletteColor(i, value) {
+  const el = elements()[i];
+  if (!el) return false;
+  const clean = normalizeHex(value) || String(value || '').trim();
+  if (!clean) return false;
+  const vals = cleanPaletteValues(Array.isArray(el.color_palette) ? el.color_palette : []);
+  if (!vals.includes(clean)) vals.push(clean);
+  el.color_palette = vals;
+  return true;
+}
 
 function renderFieldsTop() {
   const enabled = !!doc;
@@ -539,6 +602,9 @@ function renderFieldsTop() {
   fldArt.value = String(sd.art_style || '');
   fldMedium.value = String(sd.medium || '');
   fldStylePalette.value = paletteToText(sd.color_palette);
+  const oldChips = fldStylePalette.parentElement.querySelector('.palette-chips');
+  if (oldChips) oldChips.remove();
+  fldStylePalette.insertAdjacentElement('afterend', renderPaletteChips(sd.color_palette));
   fldBackground.value = String(comp.background || '');
 }
 
@@ -649,14 +715,25 @@ function buildCard(el, i) {
     bboxRow.appendChild(note);
   }
 
+  const palWrap = document.createElement('div');
+  palWrap.className = 'palette-row';
   const pal = document.createElement('input');
   pal.className = 'el-pal';
   pal.placeholder = 'color_palette: #AABBCC, #DDEEFF';
   pal.value = paletteToText(el.color_palette);
   pal.addEventListener('focus', pushUndoMaybe);
-  pal.addEventListener('input', () => { el.color_palette = textToPalette(pal.value); markDirty(); });
+  pal.addEventListener('input', () => { markPaletteManual(i); setElementPalette(i, textToPalette(pal.value)); markDirty(); });
+  const chips = renderPaletteChips(el.color_palette, el, (idx) => {
+    pushUndoMaybe();
+    const vals = Array.isArray(el.color_palette) ? el.color_palette.slice() : [];
+    vals.splice(idx, 1);
+    markPaletteManual(i);
+    setElementPalette(i, vals);
+    markDirty(); renderElements();
+  });
+  palWrap.append(pal, chips);
 
-  card.append(head, desc, bboxRow, pal);
+  card.append(head, desc, bboxRow, palWrap);
   card.addEventListener('click', () => selectIdx(i));
   return card;
 }
@@ -735,6 +812,226 @@ function startDrawFor(i) {
   setMode('draw');
   drawSticky = false;
   setMessage(`Drag on the image to place the box for element ${i + 1}.`);
+}
+
+
+function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map((n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+function rgbDistanceSq(a, b) {
+  const dr = a.r - b.r, dg = a.g - b.g, db = a.b - b.b;
+  return dr * dr + dg * dg + db * db;
+}
+function extractRectPixels(rect, sourceImg = img) {
+  if (!sourceImg || !rect || rect.width <= 0 || rect.height <= 0) return null;
+  const c = document.createElement('canvas');
+  const w = Math.max(1, Math.round(rect.width));
+  const h = Math.max(1, Math.round(rect.height));
+  c.width = w; c.height = h;
+  const ictx = c.getContext('2d', { willReadFrequently: true });
+  ictx.drawImage(sourceImg, rect.left, rect.top, rect.width, rect.height, 0, 0, w, h);
+  return { data: ictx.getImageData(0, 0, w, h).data, w, h };
+}
+function sampleImageRectColors(rect, maxColors = 5, sourceImg = img) {
+  const pixels = extractRectPixels(rect, sourceImg);
+  if (!pixels) return [];
+  const { data } = pixels;
+  const bins = new Map();
+  const stride = Math.max(4, Math.floor(data.length / 16000) & ~3);
+  let total = 0;
+  for (let i = 0; i < data.length; i += stride) {
+    if (data[i + 3] < 8) continue;
+    total++;
+    const qr = data[i] >> 4, qg = data[i + 1] >> 4, qb = data[i + 2] >> 4;
+    const key = `${qr},${qg},${qb}`;
+    const bin = bins.get(key) || { r: 0, g: 0, b: 0, count: 0 };
+    bin.r += data[i]; bin.g += data[i + 1]; bin.b += data[i + 2]; bin.count++;
+    bins.set(key, bin);
+  }
+  if (!total) return [];
+  const candidates = Array.from(bins.values())
+    .map((bin) => ({ r: bin.r / bin.count, g: bin.g / bin.count, b: bin.b / bin.count, count: bin.count }))
+    .filter((bin) => bin.count / total >= 0.015)
+    .sort((a, b) => b.count - a.count);
+  const picked = [];
+  const minDistanceSq = 34 * 34;
+  for (const c of candidates) {
+    if (picked.every((p) => rgbDistanceSq(p, c) >= minDistanceSq)) picked.push(c);
+    if (picked.length >= maxColors) break;
+  }
+  if (!picked.length && candidates.length) picked.push(candidates[0]);
+  return picked.map((c) => rgbToHex(c.r, c.g, c.b));
+}
+function sampleImageRect(rect, sourceImg = img) {
+  return sampleImageRectColors(rect, 1, sourceImg)[0] || '';
+}
+function colorAtCanvasPoint(p) {
+  if (!imgLoaded || !p) return '';
+  const ip = toImg(p);
+  if (ip.x < 0 || ip.y < 0 || ip.x >= img.naturalWidth || ip.y >= img.naturalHeight) return '';
+  return sampleImageRect({ left: Math.floor(ip.x), top: Math.floor(ip.y), width: 1, height: 1 });
+}
+function autofillPaletteForIndex(i) {
+  const el = elements()[i];
+  if (!el || !Array.isArray(el.bbox)) return false;
+  const rect = rectOf(i);
+  const colors = sampleImageRectColors(rect, 5, img);
+  if (!colors.length) return false;
+  setElementPalette(i, colors);
+  return true;
+}
+function autofillSelectedPalette() {
+  if (selectedIdx < 0) { setMessage('Select an element with a bbox before autofilling its palette.', true); return; }
+  pushUndoMaybe();
+  if (!autofillPaletteForIndex(selectedIdx)) { setMessage('Selected element has no usable bbox to sample.', true); return; }
+  markDirty(); renderElements(); draw(); setMessage('Palette autofilled with distinct colors from selected bbox.');
+}
+function autofillAllPalettes() {
+  if (!doc) return;
+  pushUndoMaybe();
+  let n = 0;
+  elements().forEach((_, i) => { if (autofillPaletteForIndex(i)) n++; });
+  if (!n) { setMessage('No element bboxes were available to sample.', true); return; }
+  markDirty(); renderElements(); draw(); setMessage(`Autofilled ${n} palette${n === 1 ? '' : 's'} with distinct bbox colors.`);
+}
+function stripSelectedPalette() {
+  const el = elements()[selectedIdx];
+  if (!el || !Object.prototype.hasOwnProperty.call(el, 'color_palette')) return;
+  pushUndoMaybe(); markPaletteManual(selectedIdx); delete el.color_palette; markDirty(); renderElements(); setMessage('Removed selected element palette.');
+}
+function stripAllPalettes() {
+  if (!doc) return;
+  pushUndoMaybe();
+  let n = 0;
+  elements().forEach((el, i) => { if (Object.prototype.hasOwnProperty.call(el, 'color_palette')) { markPaletteManual(i); delete el.color_palette; n++; } });
+  markDirty(); renderElements(); setMessage(`Removed ${n} element palette${n === 1 ? '' : 's'}.`);
+}
+
+async function datasetItems() {
+  const params = new URLSearchParams({ status: 'all', sort: 'filename', recursive: recursive.checked ? 'true' : 'false' });
+  const res = await fetch('/api/list?' + params.toString());
+  const out = await res.json();
+  if (out.error) throw new Error(out.error);
+  return out.items || [];
+}
+async function saveCaptionForRel(rel, text, opts = {}) {
+  const body = { rel, caption: text, mark_fixed: false, backup: backupOriginals.checked };
+  if (opts.manualPaletteBboxes) body.manual_palette_bboxes = opts.manualPaletteBboxes;
+  const res = await fetch('/api/save-caption', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const out = await res.json();
+  if (out.error) throw new Error(out.error);
+  return out;
+}
+function loadImageForRel(rel) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Could not load image.'));
+    image.src = mediaUrl(rel);
+  });
+}
+function autofillDocPalettesFromImage(targetDoc, sourceImg, manualKeys = new Set()) {
+  const arr = C.getElements(targetDoc) || [];
+  let changed = 0;
+  for (const el of arr) {
+    const key = paletteBboxKey(el);
+    if (key && manualKeys.has(key)) continue;
+    const rect = C.bboxToRect(el.bbox, order(), coordMax(), sourceImg.naturalWidth, sourceImg.naturalHeight);
+    if (!rect) continue;
+    const colors = sampleImageRectColors(rect, 5, sourceImg);
+    if (!colors.length) continue;
+    const next = cleanPaletteValues(colors);
+    if (JSON.stringify(el.color_palette || []) === JSON.stringify(next)) continue;
+    el.color_palette = next;
+    changed++;
+  }
+  return changed;
+}
+async function batchAutofillPalettes() {
+  if (dirty && !confirm('Current caption has unsaved changes. Continue without saving them first?')) return;
+  const all = await datasetItems();
+  if (!all.length) { setMessage('No dataset items loaded.', true); return; }
+  if (!confirm(`Autofill color_palette fields for all ${all.length} loaded dataset item(s)? Bboxes previously palette-edited by hand will be skipped. Other existing element palettes will be replaced when a bbox can be sampled. Original captions are backed up according to your backup setting.`)) return;
+  batchAutofillPalettesBtn.disabled = true; batchRepairJsonBtn.disabled = true;
+  let saved = 0, skipped = 0, failed = 0, changedElements = 0;
+  try {
+    for (let idx = 0; idx < all.length; idx++) {
+      const rel = all[idx].rel;
+      setMessage(`Autofilling palettes ${idx + 1}/${all.length}: ${rel}`);
+      try {
+        const itemData = await loadItemDataForRel(rel);
+        const parsed = C.parseCaptionDoc(itemData.caption || '', { repair: autoRepairJson.checked });
+        if (!parsed.doc) { skipped++; continue; }
+        const sourceImg = await loadImageForRel(rel);
+        const manualKeys = new Set(Array.isArray(itemData.meta && itemData.meta.manual_palette_bboxes) ? itemData.meta.manual_palette_bboxes : []);
+        const changed = autofillDocPalettesFromImage(parsed.doc, sourceImg, manualKeys);
+        if (!changed) { skipped++; continue; }
+        await saveCaptionForRel(rel, C.serializeDoc(parsed.doc, saveFormat.value !== 'minified'));
+        saved++; changedElements += changed;
+      } catch (e) {
+        console.warn('Palette batch failed for', rel, e);
+        failed++;
+      }
+    }
+  } finally {
+    batchAutofillPalettesBtn.disabled = false; batchRepairJsonBtn.disabled = false;
+  }
+  await refreshList(true);
+  if (activeRel) {
+    dirty = false;
+    await loadItem(activeRel);
+    updateDirtyUi();
+  }
+  setMessage(`Dataset palette autofill saved ${saved} caption${saved === 1 ? '' : 's'} (${changedElements} element${changedElements === 1 ? '' : 's'} changed), skipped ${skipped}, failed ${failed}${failed ? ' — see console.' : ''}${failed ? '' : '.'}`, !!failed);
+}
+async function batchRepairJson() {
+  if (dirty && !confirm('Current caption has unsaved changes. Continue without saving them first?')) return;
+  const all = await datasetItems();
+  if (!all.length) { setMessage('No dataset items loaded.', true); return; }
+  if (!confirm(`Auto-repair and save JSON captions for all ${all.length} loaded dataset item(s)? Plain-text captions and unrepairable JSON will be skipped. Original captions are backed up according to your backup setting.`)) return;
+  batchAutofillPalettesBtn.disabled = true; batchRepairJsonBtn.disabled = true;
+  let saved = 0, skipped = 0, failed = 0;
+  try {
+    for (let idx = 0; idx < all.length; idx++) {
+      const rel = all[idx].rel;
+      setMessage(`Repairing JSON ${idx + 1}/${all.length}: ${rel}`);
+      try {
+        const text = await loadCaptionForRel(rel);
+        const parsed = C.parseCaptionDoc(text, { repair: true });
+        if (!parsed.doc || !parsed.repaired) { skipped++; continue; }
+        await saveCaptionForRel(rel, C.serializeDoc(parsed.doc, saveFormat.value !== 'minified'));
+        saved++;
+      } catch (e) {
+        console.warn('JSON repair batch failed for', rel, e);
+        failed++;
+      }
+    }
+  } finally {
+    batchAutofillPalettesBtn.disabled = false; batchRepairJsonBtn.disabled = false;
+  }
+  await refreshList(true);
+  if (activeRel) {
+    dirty = false;
+    await loadItem(activeRel);
+    updateDirtyUi();
+  }
+  setMessage(`Dataset JSON repair saved ${saved} caption${saved === 1 ? '' : 's'}, skipped ${skipped}, failed ${failed}${failed ? ' — see console.' : ''}${failed ? '' : '.'}`, !!failed);
+}
+function startPalettePick() {
+  if (selectedIdx < 0) { setMessage('Select an element, then click the image to pick its palette color.', true); return; }
+  colorPickIdx = selectedIdx;
+  setMode('pickColor');
+  setMessage('Click the image to set the selected element palette color.');
+}
+function pickPaletteFromPoint(i, p) {
+  const el = elements()[i];
+  if (!el) return;
+  const hex = colorAtCanvasPoint(p);
+  if (!hex) { setMessage('Click inside the image to pick a palette color.', true); return; }
+  pushUndoMaybe(); markPaletteManual(i); addElementPaletteColor(i, hex); markDirty(); renderElements(); selectIdx(i); setMode('select'); draw(); setMessage(`Added ${hex} to element #${i + 1} palette. Press P again to pick another color.`);
 }
 
 /* ---------------- issues ---------------- */
@@ -926,7 +1223,7 @@ function updateReadout(p) {
 function setCanvasCursor(p) {
   if (drag) return;
   if (spaceHeld) { imageCanvas.style.cursor = 'grab'; return; }
-  if (mode === 'draw') { imageCanvas.style.cursor = 'crosshair'; return; }
+  if (mode === 'draw' || mode === 'pickColor') { imageCanvas.style.cursor = 'crosshair'; return; }
   const h = p ? handleHit(p) : null;
   if (h) { imageCanvas.style.cursor = HANDLE_CURSOR[h]; return; }
   imageCanvas.style.cursor = hoverIdx >= 0 ? 'move' : 'default';
@@ -949,6 +1246,12 @@ imageCanvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (e.button !== 0) return;
+  if (mode === 'pickColor') {
+    const idx = colorPickIdx !== null ? colorPickIdx : selectedIdx;
+    pickPaletteFromPoint(idx, p);
+    e.preventDefault();
+    return;
+  }
   if (mode === 'draw') {
     pushUndoMaybe();
     const ip = toImg(p);
@@ -983,7 +1286,7 @@ imageCanvas.addEventListener('pointermove', (e) => {
     updateReadout(p);
     if (hoverIdx >= 0) showBoxTip(e.clientX, e.clientY, elements()[hoverIdx], hoverIdx);
     else hideBoxTip();
-    if (mode === 'draw') draw(); // crosshair follows
+    if (mode === 'draw' || mode === 'pickColor') draw(); // crosshair follows
     return;
   }
   if (drag.kind === 'pan') {
@@ -1086,8 +1389,10 @@ imageCanvas.addEventListener('pointerleave', () => { lastPointer = null; hoverId
 function setMode(m) {
   mode = m;
   if (m !== 'draw') { drawSticky = false; pendingDrawIdx = null; }
+  if (m !== 'pickColor') colorPickIdx = null;
   modeSelectBtn.classList.toggle('active', m === 'select');
   modeDrawBtn.classList.toggle('active', m === 'draw');
+  if (pickPaletteBtn) pickPaletteBtn.classList.toggle('active', m === 'pickColor');
   setCanvasCursor(lastPointer);
   draw();
 }
@@ -1233,10 +1538,14 @@ const aiMaxTokens = $('aiMaxTokens'), aiTemperature = $('aiTemperature'), aiTime
 const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiOverlayMax = $('aiOverlayMax');
 const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiIncludePrettyJson'), aiIncludePromptTemplate = $('aiIncludePromptTemplate');
 const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn');
+const aiBatchParallel = $('aiBatchParallel'), aiBatchReviewMode = $('aiBatchReviewMode'), aiBatchScope = $('aiBatchScope');
+const aiBatchStart = $('aiBatchStart'), aiBatchPause = $('aiBatchPause'), aiBatchResume = $('aiBatchResume'), aiBatchCancel = $('aiBatchCancel');
+const aiBatchAcceptAll = $('aiBatchAcceptAll'), aiBatchRejectAll = $('aiBatchRejectAll'), aiBatchStatus = $('aiBatchStatus'), aiBatchList = $('aiBatchList');
 let pendingAiCaption = null;
 let pendingAiBeforeCaption = null;
 let pendingAiOps = null;
 let aiOverlayState = { before: null, after: null, scale: 1, ox: 0, oy: 0, drag: null };
+let aiBatch = { running: false, paused: false, cancelled: false, queue: [], active: 0, done: 0, results: [] };
 
 function aiSettingsFromUi() {
   return {
@@ -1268,7 +1577,7 @@ function saveAiPrefs() {
     maxTokens: aiMaxTokens.value, temperature: aiTemperature.value, timeout: aiTimeout.value,
     sendOriginal: aiSendOriginal.checked, sendOverlay: aiSendOverlay.checked, autoApply: aiAutoApply.checked,
     overlayMax: aiOverlayMax.value, includeRawJson: aiIncludeRawJson.checked, includePrettyJson: aiIncludePrettyJson.checked,
-    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value
+    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value, batchParallel: aiBatchParallel.value, batchReviewMode: aiBatchReviewMode.value, batchScope: aiBatchScope.value
   };
   lastPrefs = p;
   writePrefs();
@@ -1291,6 +1600,9 @@ function initAiPrefs() {
   if (typeof p.includeRawJson === 'boolean') aiIncludeRawJson.checked = p.includeRawJson;
   if (typeof p.includePrettyJson === 'boolean') aiIncludePrettyJson.checked = p.includePrettyJson;
   if (typeof p.includePromptTemplate === 'boolean') aiIncludePromptTemplate.checked = p.includePromptTemplate;
+  if (p.batchParallel) aiBatchParallel.value = p.batchParallel;
+  if (p.batchReviewMode) aiBatchReviewMode.value = p.batchReviewMode;
+  if (p.batchScope) aiBatchScope.value = p.batchScope;
   updateAiRemoteWarning();
 }
 function aiResponseFormatInstructions() {
@@ -1298,13 +1610,14 @@ function aiResponseFormatInstructions() {
     return `IMPORTANT RESPONSE FORMAT:
 Return ONLY one JSON object. First character must be { and last must be }.
 Do not use markdown, code fences, comments, or explanation.
-Return a complete edited caption JSON object. Preserve unrelated content.`;
+Return a complete edited caption JSON object. Preserve unrelated content. If no changes are needed, return an empty response.`;
   }
   return `IMPORTANT RESPONSE FORMAT:
 Return ONLY one JSON object. First character must be { and last must be }.
 Do not use markdown, code fences, comments, or explanation.
 Prefer {"caption_edits":[...]} with only requested changes.
 Use update_element/add_element/remove_element/set_field. Do not include unchanged or unrelated elements.
+If no changes are needed, return {"caption_edits":[]} or an empty response.
 Full caption JSON is accepted only as a fallback.`;
 }
 function aiPromptForRequest() {
@@ -1649,6 +1962,144 @@ function applySelectedAiChanges() {
   if (!pendingAiCaption) return;
   applyAiCaption(pendingAiOps && pendingAiOps.length ? mergeSelectedAiOps(pendingAiBeforeCaption, pendingAiOps) : mergeSelectedAiCaption(pendingAiBeforeCaption, pendingAiCaption));
 }
+
+function aiBatchSetStatus(text, isError = false) {
+  aiBatchStatus.textContent = text;
+  aiBatchStatus.className = isError ? 'raw-status error' : 'raw-status';
+}
+function aiBatchCounts() {
+  const counts = { queued: aiBatch.queue.length, active: aiBatch.active, proposed: 0, nochange: 0, accepted: 0, rejected: 0, failed: 0 };
+  for (const r of aiBatch.results) counts[r.status] = (counts[r.status] || 0) + 1;
+  return counts;
+}
+function updateAiBatchControls() {
+  const c = aiBatchCounts();
+  aiBatchStart.disabled = aiBatch.running;
+  aiBatchPause.disabled = !aiBatch.running || aiBatch.paused;
+  aiBatchResume.disabled = !aiBatch.running || !aiBatch.paused;
+  aiBatchCancel.disabled = !aiBatch.running;
+  aiBatchAcceptAll.disabled = !c.proposed;
+  aiBatchRejectAll.disabled = !c.proposed;
+}
+function renderAiBatchList() {
+  updateAiBatchControls();
+  const c = aiBatchCounts();
+  aiBatchSetStatus(`queued ${c.queued} · active ${c.active} · proposed ${c.proposed || 0} · accepted ${c.accepted || 0} · no change ${c.nochange || 0} · rejected ${c.rejected || 0} · failed ${c.failed || 0}${aiBatch.paused ? ' · paused' : ''}${aiBatch.cancelled ? ' · cancelling' : ''}`, !!c.failed);
+  aiBatchList.innerHTML = '';
+  const shown = aiBatch.results.slice().reverse().slice(0, 200);
+  if (!shown.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'No completed batch items yet.';
+    aiBatchList.appendChild(empty);
+    return;
+  }
+  for (const r of shown) {
+    const row = document.createElement('div');
+    row.className = 'ai-batch-item st-' + r.status;
+    const summary = r.summary || r.error || r.status;
+    row.innerHTML = `<div><strong>${escapeText(r.rel)}</strong> <span class="badge">${escapeText(r.status)}</span></div><div class="muted">${escapeText(summary)}</div>`;
+    const actions = document.createElement('div');
+    actions.className = 'ai-batch-actions';
+    const openBtn = document.createElement('button');
+    openBtn.className = 'mini'; openBtn.textContent = 'Open';
+    openBtn.addEventListener('click', () => loadItem(r.rel));
+    actions.appendChild(openBtn);
+    if (r.status === 'proposed') {
+      const accept = document.createElement('button');
+      accept.className = 'mini primary'; accept.textContent = 'Accept';
+      accept.addEventListener('click', () => acceptAiBatchResult(r));
+      const reject = document.createElement('button');
+      reject.className = 'mini danger'; reject.textContent = 'Reject';
+      reject.addEventListener('click', () => { r.status = 'rejected'; renderAiBatchList(); });
+      actions.append(accept, reject);
+    }
+    row.appendChild(actions);
+    aiBatchList.appendChild(row);
+  }
+}
+function aiBatchItemsForScope() {
+  return aiBatchScope.value === 'visible' ? visibleItems() : datasetItems();
+}
+async function runAiEditForRel(rel, requestText) {
+  const itemData = await loadItemDataForRel(rel);
+  const parsed = C.parseCaptionDoc(itemData.caption || '', { repair: autoRepairJson.checked });
+  if (!parsed.doc) return { rel, status: 'failed', error: parsed.error || 'Caption is not structured JSON.' };
+  const before = cloneJson(parsed.doc);
+  const res = await fetch('/api/ai-edit-caption', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      image_path: rel, caption: before, user_request: requestText, coordinate_format: order(), coordinate_max: coordMax(),
+      selected_element_index: -1, validation_issues: C.validateDoc(before, coordMax()).map((x) => `${x.label}: ${x.msg}`),
+      settings: aiSettingsFromUi(), prompt_template: aiPromptForRequest()
+    })
+  });
+  const out = await res.json();
+  if (!out.ok) {
+    const details = out.validation && Array.isArray(out.validation.errors) && out.validation.errors.length ? ': ' + out.validation.errors.join('; ') : '';
+    return { rel, status: 'failed', error: (out.error || 'AI edit failed') + details, raw: out.raw_model_response || '' };
+  }
+  const after = out.caption;
+  const noChange = out.no_change || JSON.stringify(before) === JSON.stringify(after);
+  if (noChange) return { rel, status: 'nochange', before, after, summary: 'Model returned no changes.', raw: out.raw_model_response || '' };
+  const ops = out.debug && out.debug.response_mode === 'ops' ? parseAiOpsFromRaw(out.raw_model_response) : null;
+  return { rel, status: aiBatchReviewMode.value === 'auto' ? 'autosave' : 'proposed', before, after, ops, raw: out.raw_model_response || '', summary: ops && ops.length ? summarizeAiOps(ops) : summarizeAiDiff(before, after) };
+}
+async function acceptAiBatchResult(r) {
+  if (!r || !r.after || (r.status !== 'proposed' && r.status !== 'autosave')) return;
+  try {
+    await saveCaptionForRel(r.rel, C.serializeDoc(r.after, saveFormat.value !== 'minified'));
+    r.status = 'accepted';
+    r.summary = 'Saved AI edit. ' + (r.summary || '');
+    if (r.rel === activeRel) { dirty = false; await loadItem(activeRel); }
+  } catch (e) {
+    r.status = 'failed'; r.error = e.message || String(e);
+  }
+  renderAiBatchList();
+}
+async function aiBatchWorker(requestText) {
+  while (!aiBatch.cancelled) {
+    if (aiBatch.paused) { await new Promise((resolve) => setTimeout(resolve, 300)); continue; }
+    const item = aiBatch.queue.shift();
+    if (!item) break;
+    aiBatch.active++; renderAiBatchList();
+    try {
+      const result = await runAiEditForRel(item.rel, requestText);
+      aiBatch.results.push(result);
+      if (result.status === 'autosave') await acceptAiBatchResult(result);
+    } catch (e) {
+      aiBatch.results.push({ rel: item.rel, status: 'failed', error: e.message || String(e) });
+    } finally {
+      aiBatch.active--; aiBatch.done++; renderAiBatchList();
+    }
+  }
+}
+async function startAiBatchEdit() {
+  if (!aiEnabled.checked) { aiBatchSetStatus('AI Edit is disabled.', true); return; }
+  const requestText = aiEditRequest.value.trim();
+  if (!requestText) { aiBatchSetStatus('Enter an edit request before starting a batch.', true); return; }
+  if (dirty && !confirm('Current caption has unsaved changes. Continue without saving them first?')) return;
+  const list = await aiBatchItemsForScope();
+  if (!list.length) { aiBatchSetStatus('No dataset items to process.', true); return; }
+  const slots = Math.max(1, Math.min(16, Number(aiBatchParallel.value) || 1));
+  if (!confirm(`Run this AI edit over ${list.length} item(s) with ${slots} parallel slot(s)? Proposals and failures will be listed as they complete.`)) return;
+  updateAiRemoteWarning(); saveAiPrefs();
+  aiBatch = { running: true, paused: false, cancelled: false, queue: list.slice(), active: 0, done: 0, results: [] };
+  renderAiBatchList();
+  const workers = Array.from({ length: Math.min(slots, list.length) }, () => aiBatchWorker(requestText));
+  await Promise.allSettled(workers);
+  aiBatch.running = false; aiBatch.paused = false;
+  renderAiBatchList();
+  await refreshList(true);
+}
+async function acceptAllAiBatchProposals() {
+  const proposed = aiBatch.results.filter((r) => r.status === 'proposed');
+  for (const r of proposed) await acceptAiBatchResult(r);
+}
+function rejectAllAiBatchProposals() {
+  for (const r of aiBatch.results) if (r.status === 'proposed') r.status = 'rejected';
+  renderAiBatchList();
+}
 async function askAiEdit() {
   if (!aiEnabled.checked) { aiStatus.textContent = 'AI Edit is disabled.'; aiStatus.className = 'raw-status error'; return; }
   if (!activeRel || !doc) { aiStatus.textContent = 'Open a structured caption first.'; aiStatus.className = 'raw-status error'; return; }
@@ -1696,6 +2147,12 @@ async function askAiEdit() {
 aiAskBtn.addEventListener('click', askAiEdit);
 aiApplyBtn.addEventListener('click', () => { applySelectedAiChanges(); aiApplyBtn.classList.add('hidden'); });
 aiDiscardBtn.addEventListener('click', () => { pendingAiCaption = null; pendingAiBeforeCaption = null; pendingAiOps = null; aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiReview.classList.add('hidden'); aiStatus.textContent = 'AI result discarded.'; });
+aiBatchStart.addEventListener('click', () => startAiBatchEdit().catch((e) => aiBatchSetStatus(e.message || String(e), true)));
+aiBatchPause.addEventListener('click', () => { aiBatch.paused = true; renderAiBatchList(); });
+aiBatchResume.addEventListener('click', () => { aiBatch.paused = false; renderAiBatchList(); });
+aiBatchCancel.addEventListener('click', () => { aiBatch.cancelled = true; aiBatch.queue = []; renderAiBatchList(); });
+aiBatchAcceptAll.addEventListener('click', () => acceptAllAiBatchProposals().catch((e) => aiBatchSetStatus(e.message || String(e), true)));
+aiBatchRejectAll.addEventListener('click', rejectAllAiBatchProposals);
 aiSelectAllBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = true; });
 aiSelectNoneBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = false; });
 aiBeforeCanvas.addEventListener('click', openAiOverlayModal);
@@ -1714,7 +2171,7 @@ for (const modalCanvas of [aiOverlayBeforeCanvas, aiOverlayAfterCanvas]) {
 }
 aiResetPromptBtn.addEventListener('click', () => { aiPromptTemplate.value = DEFAULT_AI_PROMPT_TEMPLATE; saveAiPrefs(); });
 window.addEventListener('resize', () => { if (!aiOverlayModal.classList.contains('hidden')) drawAiOverlayModal(); });
-for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate]) {
+for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate, aiBatchParallel, aiBatchReviewMode, aiBatchScope]) {
   el.addEventListener('change', () => { updateAiRemoteWarning(); saveAiPrefs(); });
   el.addEventListener('input', debounce(() => { updateAiRemoteWarning(); saveAiPrefs(); }, 300));
 }
@@ -1768,7 +2225,7 @@ async function saveCaption(markFixed = false) {
   const text = buildSaveText();
   const res = await fetch('/api/save-caption', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rel: activeRel, caption: text, mark_fixed: markFixed, backup: backupOriginals.checked })
+    body: JSON.stringify({ rel: activeRel, caption: text, mark_fixed: markFixed, backup: backupOriginals.checked, manual_palette_bboxes: manualPaletteList() })
   });
   const out = await res.json();
   if (out.error) { setMessage(out.error, true); return; }
@@ -1805,7 +2262,7 @@ document.addEventListener('keydown', (ev) => {
     else if (k === 'y') { ev.preventDefault(); redo(); }
     return;
   }
-  if (ev.target.matches('input, textarea, select')) {
+  if (ev.target.matches('input, textarea, select, button') || ev.target.isContentEditable) {
     if (ev.key === 'Escape') ev.target.blur();
     lastKeyWasArrow = false;
     return;
@@ -1822,10 +2279,12 @@ document.addEventListener('keydown', (ev) => {
   else if (k === 'n' || k === 'N') { moveToNextUnrated(); }
   else if (k === 'v' || k === 'V') { setMode('select'); }
   else if (k === 'b' || k === 'B') { drawSticky = true; setMode('draw'); }
-  else if (k === 'f' || k === 'F') { fitView(); draw(); }
+  else if (k === 'p' || k === 'P') { startPalettePick(); }
+  else if (k === 'a' || k === 'A') { autofillSelectedPalette(); }
+  else if (k === 'f' || k === 'F') { ev.preventDefault(); fitView(); draw(); }
   else if (k === 'Escape') {
     if (anyDrawerOpen()) closeDrawers();
-    else if (mode === 'draw') setMode('select');
+    else if (mode === 'draw' || mode === 'pickColor') setMode('select');
     else selectIdx(-1);
   } else if ((k === 'Delete' || k === 'Backspace') && selectedIdx >= 0) {
     ev.preventDefault();
@@ -1862,6 +2321,12 @@ clearStatusBtn.addEventListener('click', clearStatus);
 nextJsonIssueBtn.addEventListener('click', () => moveToNextProblem('json'));
 nextBoxIssueBtn.addEventListener('click', () => moveToNextProblem('box'));
 nextMissingCaptionBtn.addEventListener('click', () => moveToNextProblem('missing'));
+autofillPaletteBtn.addEventListener('click', (ev) => { ev.shiftKey ? autofillAllPalettes() : autofillSelectedPalette(); });
+pickPaletteBtn.addEventListener('click', startPalettePick);
+stripPaletteBtn.addEventListener('click', stripSelectedPalette);
+stripAllPalettesBtn.addEventListener('click', () => { if (confirm('Remove color_palette from every element in this caption?')) stripAllPalettes(); });
+batchAutofillPalettesBtn.addEventListener('click', () => batchAutofillPalettes().catch((e) => setMessage(e.message || String(e), true)));
+batchRepairJsonBtn.addEventListener('click', () => batchRepairJson().catch((e) => setMessage(e.message || String(e), true)));
 saveCaptionBtn.addEventListener('click', () => saveCaption(false));
 saveNextBtn.addEventListener('click', () => saveAndNext(false));
 saveFixedBtn.addEventListener('click', () => saveCaption(true));

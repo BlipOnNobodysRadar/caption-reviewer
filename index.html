@@ -219,6 +219,37 @@
             <button id="aiDiscardBtn" class="hidden">Discard AI result</button>
           </div>
           <div id="aiStatus" class="raw-status"></div>
+          <details id="aiBatchPanel" class="setup">
+            <summary>Dataset AI batch edit</summary>
+            <div class="setup-body compact">
+              <p class="muted">Runs the edit request across the loaded dataset. Completed proposals can be accepted or rejected while workers continue.</p>
+              <div class="fld-grid three">
+                <label class="fld">Parallel slots <input id="aiBatchParallel" type="number" value="4" min="1" max="16"></label>
+                <label class="fld">Review mode
+                  <select id="aiBatchReviewMode">
+                    <option value="review" selected>review before save</option>
+                    <option value="auto">auto-save valid changes</option>
+                  </select>
+                </label>
+                <label class="fld">Batch scope
+                  <select id="aiBatchScope">
+                    <option value="all" selected>entire dataset</option>
+                    <option value="visible">current filtered list</option>
+                  </select>
+                </label>
+              </div>
+              <div class="setup-row">
+                <button id="aiBatchStart" class="primary">Start dataset AI edit</button>
+                <button id="aiBatchPause" disabled>Pause</button>
+                <button id="aiBatchResume" disabled>Resume</button>
+                <button id="aiBatchCancel" class="danger" disabled>Cancel</button>
+                <button id="aiBatchAcceptAll" disabled>Accept all proposed</button>
+                <button id="aiBatchRejectAll" disabled>Reject all proposed</button>
+              </div>
+              <div id="aiBatchStatus" class="raw-status"></div>
+              <div id="aiBatchList" class="ai-batch-list"></div>
+            </div>
+          </details>
           <div id="aiRemoteWarning" class="notice warn hidden">Warning: this backend URL is not localhost/127.0.0.1. Images will be sent to that configured address.</div>
           <div id="aiDiff" class="ai-diff hidden"></div>
           <div id="aiReview" class="ai-review hidden">
@@ -321,7 +352,13 @@
         <div class="elements-head">
           <strong>Elements</strong>
           <span id="elementsCount" class="muted">0</span>
-          <span class="muted hint">click a card or a box to select; Draw box binds the next drag</span>
+          <button id="autofillPalette" class="mini" title="Autofill selected palette with distinct colors sampled from its bbox (A). Shift-click fills all boxed elements.">Auto palette</button>
+          <button id="pickPalette" class="mini" title="Pick selected element palette by clicking the image (P)">Pick color</button>
+          <button id="stripPalette" class="mini" title="Remove color_palette from selected element">Strip palette</button>
+          <button id="stripAllPalettes" class="mini danger" title="Remove color_palette from every element">Strip all</button>
+          <button id="batchAutofillPalettes" class="mini" title="Autofill palettes for every caption in the loaded dataset, skipping bboxes previously manually palette-edited">Auto palettes: dataset</button>
+          <button id="batchRepairJson" class="mini" title="Auto-repair and save JSON captions across the loaded dataset">Repair JSON: dataset</button>
+          <span class="muted hint">click a card or box to select; A autofills, P adds picked colors</span>
         </div>
         <div id="elementsList" class="elements-list"></div>
       </div>

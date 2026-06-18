@@ -469,6 +469,10 @@ def apply_ai_edit_ops(current_caption: dict[str, Any], ops: list[dict[str, Any]]
 
 
 def parse_ai_caption_response(text: str, current_caption: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str | None, str]:
+    if not str(text or "").strip():
+        if isinstance(current_caption, dict):
+            return json.loads(json.dumps(current_caption)), None, "no_change"
+        return None, "Model returned an empty response and no current caption was available.", "no_change"
     obj, parse_error = parse_ai_json_response(text)
     if parse_error:
         return None, parse_error, "invalid"
@@ -478,6 +482,8 @@ def parse_ai_caption_response(text: str, current_caption: dict[str, Any] | None 
         return obj, None, "full_caption"
     ops, ops_error = normalize_ai_edit_ops(obj)
     if ops is not None:
+        if not ops and isinstance(current_caption, dict):
+            return json.loads(json.dumps(current_caption)), None, "no_change"
         if not isinstance(current_caption, dict):
             return None, "Model returned edit operations, but the current caption was unavailable.", "ops"
         edited, errors = apply_ai_edit_ops(current_caption, ops)
@@ -939,7 +945,7 @@ def ai_edit_caption():
             }
     if not validation["valid"]:
         return jsonify({"ok": False, "error": "Model returned invalid caption.", "raw_model_response": raw_model_response, "validation": validation, "debug": {"llamacpp_url": url, "overlay_generated": overlay_generated, "response_mode": response_mode}}), 422
-    return jsonify({"ok": True, "caption": edited, "raw_model_response": raw_model_response, "validation": validation, "debug": {"overlay_generated": overlay_generated, "llamacpp_url": url, "response_mode": response_mode}})
+    return jsonify({"ok": True, "caption": edited, "no_change": response_mode == "no_change" or edited == caption, "raw_model_response": raw_model_response, "validation": validation, "debug": {"overlay_generated": overlay_generated, "llamacpp_url": url, "response_mode": response_mode}})
 
 @app.route("/api/status", methods=["POST"])
 def set_status():
@@ -987,6 +993,12 @@ def save_caption():
     items = state.setdefault("items", {})
     entry = items.setdefault(rel, {})
     entry["caption_saved_at"] = now_ts()
+    if "manual_palette_bboxes" in data:
+        raw_keys = data.get("manual_palette_bboxes")
+        if isinstance(raw_keys, list):
+            entry["manual_palette_bboxes"] = sorted(
+                {str(k) for k in raw_keys if isinstance(k, (str, int, float)) and str(k)}
+            )
     if mark_fixed:
         entry["status"] = "fixed"
         entry["updated_at"] = now_ts()
