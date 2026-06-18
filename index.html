@@ -245,7 +245,20 @@
                 <button id="aiBatchCancel" class="danger" disabled>Cancel</button>
                 <button id="aiBatchAcceptAll" disabled>Accept all proposed</button>
                 <button id="aiBatchRejectAll" disabled>Reject all proposed</button>
+                <button id="aiBatchRetryFailed" disabled>Retry failed</button>
+                <button id="aiBatchClearSettled" disabled>Clear settled</button>
+                <button id="aiBatchClearAll" disabled>Clear all</button>
               </div>
+              <label class="inline">show
+                <select id="aiBatchFilter">
+                  <option value="all" selected>all batch results</option>
+                  <option value="proposed">proposed</option>
+                  <option value="failed">failed</option>
+                  <option value="accepted">accepted</option>
+                  <option value="rejected">rejected</option>
+                  <option value="nochange">no change</option>
+                </select>
+              </label>
               <div id="aiBatchStatus" class="raw-status"></div>
               <div id="aiBatchList" class="ai-batch-list"></div>
             </div>

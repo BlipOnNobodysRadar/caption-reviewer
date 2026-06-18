@@ -1540,12 +1540,13 @@ const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiInclu
 const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn');
 const aiBatchParallel = $('aiBatchParallel'), aiBatchReviewMode = $('aiBatchReviewMode'), aiBatchScope = $('aiBatchScope');
 const aiBatchStart = $('aiBatchStart'), aiBatchPause = $('aiBatchPause'), aiBatchResume = $('aiBatchResume'), aiBatchCancel = $('aiBatchCancel');
-const aiBatchAcceptAll = $('aiBatchAcceptAll'), aiBatchRejectAll = $('aiBatchRejectAll'), aiBatchStatus = $('aiBatchStatus'), aiBatchList = $('aiBatchList');
+const aiBatchAcceptAll = $('aiBatchAcceptAll'), aiBatchRejectAll = $('aiBatchRejectAll'), aiBatchRetryFailed = $('aiBatchRetryFailed');
+const aiBatchClearSettled = $('aiBatchClearSettled'), aiBatchClearAll = $('aiBatchClearAll'), aiBatchFilter = $('aiBatchFilter'), aiBatchStatus = $('aiBatchStatus'), aiBatchList = $('aiBatchList');
 let pendingAiCaption = null;
 let pendingAiBeforeCaption = null;
 let pendingAiOps = null;
 let aiOverlayState = { before: null, after: null, scale: 1, ox: 0, oy: 0, drag: null };
-let aiBatch = { running: false, paused: false, cancelled: false, queue: [], active: 0, done: 0, results: [] };
+let aiBatch = { running: false, paused: false, cancelled: false, queue: [], active: 0, done: 0, results: [], lastRequestText: '' };
 
 function aiSettingsFromUi() {
   return {
@@ -1577,7 +1578,7 @@ function saveAiPrefs() {
     maxTokens: aiMaxTokens.value, temperature: aiTemperature.value, timeout: aiTimeout.value,
     sendOriginal: aiSendOriginal.checked, sendOverlay: aiSendOverlay.checked, autoApply: aiAutoApply.checked,
     overlayMax: aiOverlayMax.value, includeRawJson: aiIncludeRawJson.checked, includePrettyJson: aiIncludePrettyJson.checked,
-    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value, batchParallel: aiBatchParallel.value, batchReviewMode: aiBatchReviewMode.value, batchScope: aiBatchScope.value
+    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value, batchParallel: aiBatchParallel.value, batchReviewMode: aiBatchReviewMode.value, batchScope: aiBatchScope.value, batchFilter: aiBatchFilter.value
   };
   lastPrefs = p;
   writePrefs();
@@ -1603,6 +1604,7 @@ function initAiPrefs() {
   if (p.batchParallel) aiBatchParallel.value = p.batchParallel;
   if (p.batchReviewMode) aiBatchReviewMode.value = p.batchReviewMode;
   if (p.batchScope) aiBatchScope.value = p.batchScope;
+  if (p.batchFilter) aiBatchFilter.value = p.batchFilter;
   updateAiRemoteWarning();
 }
 function aiResponseFormatInstructions() {
@@ -1980,6 +1982,9 @@ function updateAiBatchControls() {
   aiBatchCancel.disabled = !aiBatch.running;
   aiBatchAcceptAll.disabled = !c.proposed;
   aiBatchRejectAll.disabled = !c.proposed;
+  aiBatchRetryFailed.disabled = aiBatch.running || !c.failed;
+  aiBatchClearSettled.disabled = !aiBatch.results.some((r) => ['accepted', 'rejected', 'nochange'].includes(r.status));
+  aiBatchClearAll.disabled = aiBatch.running || !aiBatch.results.length;
 }
 async function waitForActiveImage(rel, timeoutMs = 5000) {
   const start = Date.now();
@@ -2016,11 +2021,12 @@ function renderAiBatchList() {
   const c = aiBatchCounts();
   aiBatchSetStatus(`queued ${c.queued} · active ${c.active} · proposed ${c.proposed || 0} · accepted ${c.accepted || 0} · no change ${c.nochange || 0} · rejected ${c.rejected || 0} · failed ${c.failed || 0}${aiBatch.paused ? ' · paused' : ''}${aiBatch.cancelled ? ' · cancelling' : ''}`, !!c.failed);
   aiBatchList.innerHTML = '';
-  const shown = aiBatch.results.slice().reverse().slice(0, 200);
+  const filter = aiBatchFilter.value || 'all';
+  const shown = aiBatch.results.filter((r) => filter === 'all' || r.status === filter).slice().reverse().slice(0, 200);
   if (!shown.length) {
     const empty = document.createElement('div');
     empty.className = 'muted';
-    empty.textContent = 'No completed batch items yet.';
+    empty.textContent = filter === 'all' ? 'No completed batch items yet.' : `No ${filter} batch items.`;
     aiBatchList.appendChild(empty);
     return;
   }
@@ -2114,7 +2120,7 @@ async function startAiBatchEdit() {
   const slots = Math.max(1, Math.min(16, Number(aiBatchParallel.value) || 1));
   if (!confirm(`Run this AI edit over ${list.length} item(s) with ${slots} parallel slot(s)? Proposals and failures will be listed as they complete.`)) return;
   updateAiRemoteWarning(); saveAiPrefs();
-  aiBatch = { running: true, paused: false, cancelled: false, queue: list.slice(), active: 0, done: 0, results: [] };
+  aiBatch = { running: true, paused: false, cancelled: false, queue: list.slice(), active: 0, done: 0, results: [], lastRequestText: requestText };
   renderAiBatchList();
   const workers = Array.from({ length: Math.min(slots, list.length) }, () => aiBatchWorker(requestText));
   await Promise.allSettled(workers);
@@ -2128,6 +2134,31 @@ async function acceptAllAiBatchProposals() {
 }
 function rejectAllAiBatchProposals() {
   for (const r of aiBatch.results) if (r.status === 'proposed') r.status = 'rejected';
+  renderAiBatchList();
+}
+async function retryFailedAiBatchResults() {
+  if (aiBatch.running) return;
+  const failed = aiBatch.results.filter((r) => r.status === 'failed');
+  if (!failed.length) return;
+  const requestText = (aiBatch.lastRequestText || aiEditRequest.value || '').trim();
+  if (!requestText) { aiBatchSetStatus('No batch prompt is available for retry.', true); return; }
+  const slots = Math.max(1, Math.min(16, Number(aiBatchParallel.value) || 1));
+  aiBatch.results = aiBatch.results.filter((r) => r.status !== 'failed');
+  aiBatch.running = true; aiBatch.paused = false; aiBatch.cancelled = false; aiBatch.queue = failed.map((r) => ({ rel: r.rel })); aiBatch.active = 0; aiBatch.done = 0; aiBatch.lastRequestText = requestText;
+  renderAiBatchList();
+  const workers = Array.from({ length: Math.min(slots, aiBatch.queue.length) }, () => aiBatchWorker(requestText));
+  await Promise.allSettled(workers);
+  aiBatch.running = false; aiBatch.paused = false;
+  renderAiBatchList();
+  await refreshList(true);
+}
+function clearSettledAiBatchResults() {
+  aiBatch.results = aiBatch.results.filter((r) => !['accepted', 'rejected', 'nochange'].includes(r.status));
+  renderAiBatchList();
+}
+function clearAllAiBatchResults() {
+  if (aiBatch.running) return;
+  aiBatch.results = [];
   renderAiBatchList();
 }
 async function askAiEdit() {
@@ -2183,6 +2214,10 @@ aiBatchResume.addEventListener('click', () => { aiBatch.paused = false; renderAi
 aiBatchCancel.addEventListener('click', () => { aiBatch.cancelled = true; aiBatch.queue = []; renderAiBatchList(); });
 aiBatchAcceptAll.addEventListener('click', () => acceptAllAiBatchProposals().catch((e) => aiBatchSetStatus(e.message || String(e), true)));
 aiBatchRejectAll.addEventListener('click', rejectAllAiBatchProposals);
+aiBatchRetryFailed.addEventListener('click', () => retryFailedAiBatchResults().catch((e) => aiBatchSetStatus(e.message || String(e), true)));
+aiBatchClearSettled.addEventListener('click', clearSettledAiBatchResults);
+aiBatchClearAll.addEventListener('click', clearAllAiBatchResults);
+aiBatchFilter.addEventListener('change', () => { saveAiPrefs(); renderAiBatchList(); });
 aiSelectAllBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = true; });
 aiSelectNoneBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = false; });
 aiBeforeCanvas.addEventListener('click', openAiOverlayModal);
@@ -2201,7 +2236,7 @@ for (const modalCanvas of [aiOverlayBeforeCanvas, aiOverlayAfterCanvas]) {
 }
 aiResetPromptBtn.addEventListener('click', () => { aiPromptTemplate.value = DEFAULT_AI_PROMPT_TEMPLATE; saveAiPrefs(); });
 window.addEventListener('resize', () => { if (!aiOverlayModal.classList.contains('hidden')) drawAiOverlayModal(); });
-for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate, aiBatchParallel, aiBatchReviewMode, aiBatchScope]) {
+for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate, aiBatchParallel, aiBatchReviewMode, aiBatchScope, aiBatchFilter]) {
   el.addEventListener('change', () => { updateAiRemoteWarning(); saveAiPrefs(); });
   el.addEventListener('input', debounce(() => { updateAiRemoteWarning(); saveAiPrefs(); }, 300));
 }
