@@ -28,6 +28,7 @@ const fldHld = $('fld_hld'), fldAesthetics = $('fld_aesthetics'), fldLighting = 
 const fldArt = $('fld_art'), fldMedium = $('fld_medium'), fldStylePalette = $('fld_stylePalette');
 const fldBackground = $('fld_background');
 const elementsCount = $('elementsCount'), elementsList = $('elementsList');
+const autofillPaletteBtn = $('autofillPalette'), pickPaletteBtn = $('pickPalette'), stripPaletteBtn = $('stripPalette'), stripAllPalettesBtn = $('stripAllPalettes');
 const captionText = $('captionText'), captionPath = $('captionPath');
 const rawApplyBtn = $('rawApplyBtn'), repairJsonBtn = $('repairJsonBtn'), rawStatus = $('rawStatus');
 const saveFormat = $('saveFormat'), saveCaptionBtn = $('saveCaption'), saveFixedBtn = $('saveFixed');
@@ -46,7 +47,7 @@ let items = [], activeRel = null, activeIndex = -1;
 let originalText = '';
 let doc = null, plain = false, parseError = null, parseRepaired = false, parseRepairKind = "";
 let selectedIdx = -1, hoverIdx = -1;
-let mode = 'select';            // 'select' | 'draw'
+let mode = 'select';            // 'select' | 'draw' | 'pickColor'
 let drawSticky = false;         // B key keeps draw mode after one box
 let pendingDrawIdx = null;      // next drawn rect goes to this element
 let dirty = false, rawDirtyPending = false;
@@ -54,6 +55,7 @@ let activeTab = 'fields';
 let view = { scale: 1, ox: 0, oy: 0 };
 let img = new Image(), imgLoaded = false;
 let drag = null, spaceHeld = false, lastPointer = null, lastKeyWasArrow = false;
+let colorPickIdx = null;
 let undoStack = [], redoStack = [];
 
 /* recent folders + last-session restore (persisted in localStorage prefs) */
@@ -509,6 +511,32 @@ function paletteToText(v) { return Array.isArray(v) ? v.join(', ') : (v == null 
 function textToPalette(s) {
   return s.split(',').map((x) => x.trim()).filter(Boolean);
 }
+function isHexColor(v) { return /^#[0-9a-f]{6}$/i.test(String(v || '').trim()); }
+function normalizeHex(v) { return isHexColor(v) ? String(v).trim().toUpperCase() : ''; }
+function renderPaletteChips(values, owner, onRemove) {
+  const wrap = document.createElement('div');
+  wrap.className = 'palette-chips';
+  const vals = Array.isArray(values) ? values : textToPalette(values == null ? '' : String(values));
+  vals.forEach((raw, idx) => {
+    const hex = normalizeHex(raw);
+    if (!hex) return;
+    const chip = document.createElement(owner ? 'button' : 'span');
+    chip.className = 'palette-swatch';
+    chip.style.background = hex;
+    chip.title = hex + (owner ? ' — click to remove' : '');
+    chip.setAttribute('aria-label', hex);
+    if (owner) chip.addEventListener('click', (ev) => { ev.stopPropagation(); onRemove(idx); });
+    wrap.appendChild(chip);
+  });
+  return wrap;
+}
+function setElementPalette(i, values) {
+  const el = elements()[i];
+  if (!el) return;
+  const clean = values.map((v) => normalizeHex(v) || String(v).trim()).filter(Boolean);
+  if (clean.length) el.color_palette = clean;
+  else delete el.color_palette;
+}
 
 function renderFieldsTop() {
   const enabled = !!doc;
@@ -539,6 +567,9 @@ function renderFieldsTop() {
   fldArt.value = String(sd.art_style || '');
   fldMedium.value = String(sd.medium || '');
   fldStylePalette.value = paletteToText(sd.color_palette);
+  const oldChips = fldStylePalette.parentElement.querySelector('.palette-chips');
+  if (oldChips) oldChips.remove();
+  fldStylePalette.insertAdjacentElement('afterend', renderPaletteChips(sd.color_palette));
   fldBackground.value = String(comp.background || '');
 }
 
@@ -649,14 +680,24 @@ function buildCard(el, i) {
     bboxRow.appendChild(note);
   }
 
+  const palWrap = document.createElement('div');
+  palWrap.className = 'palette-row';
   const pal = document.createElement('input');
   pal.className = 'el-pal';
   pal.placeholder = 'color_palette: #AABBCC, #DDEEFF';
   pal.value = paletteToText(el.color_palette);
   pal.addEventListener('focus', pushUndoMaybe);
-  pal.addEventListener('input', () => { el.color_palette = textToPalette(pal.value); markDirty(); });
+  pal.addEventListener('input', () => { setElementPalette(i, textToPalette(pal.value)); markDirty(); });
+  const chips = renderPaletteChips(el.color_palette, el, (idx) => {
+    pushUndoMaybe();
+    const vals = Array.isArray(el.color_palette) ? el.color_palette.slice() : [];
+    vals.splice(idx, 1);
+    setElementPalette(i, vals);
+    markDirty(); renderElements();
+  });
+  palWrap.append(pal, chips);
 
-  card.append(head, desc, bboxRow, pal);
+  card.append(head, desc, bboxRow, palWrap);
   card.addEventListener('click', () => selectIdx(i));
   return card;
 }
@@ -735,6 +776,82 @@ function startDrawFor(i) {
   setMode('draw');
   drawSticky = false;
   setMessage(`Drag on the image to place the box for element ${i + 1}.`);
+}
+
+
+function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map((n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+function sampleImageRect(rect) {
+  if (!imgLoaded || !rect || rect.width <= 0 || rect.height <= 0) return '';
+  const c = document.createElement('canvas');
+  const w = Math.max(1, Math.round(rect.width));
+  const h = Math.max(1, Math.round(rect.height));
+  c.width = w; c.height = h;
+  const ictx = c.getContext('2d', { willReadFrequently: true });
+  ictx.drawImage(img, rect.left, rect.top, rect.width, rect.height, 0, 0, w, h);
+  const data = ictx.getImageData(0, 0, w, h).data;
+  let r = 0, g = 0, b = 0, n = 0;
+  const step = Math.max(4, Math.floor(data.length / 4000) & ~3);
+  for (let i = 0; i < data.length; i += step) {
+    if (data[i + 3] < 8) continue;
+    r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
+  }
+  return n ? rgbToHex(r / n, g / n, b / n) : '';
+}
+function colorAtCanvasPoint(p) {
+  if (!imgLoaded || !p) return '';
+  const ip = toImg(p);
+  if (ip.x < 0 || ip.y < 0 || ip.x >= img.naturalWidth || ip.y >= img.naturalHeight) return '';
+  return sampleImageRect({ left: Math.floor(ip.x), top: Math.floor(ip.y), width: 1, height: 1 });
+}
+function autofillPaletteForIndex(i) {
+  const el = elements()[i];
+  if (!el || !Array.isArray(el.bbox)) return false;
+  const rect = rectOf(i);
+  const hex = sampleImageRect(rect);
+  if (!hex) return false;
+  setElementPalette(i, [hex]);
+  return true;
+}
+function autofillSelectedPalette() {
+  if (selectedIdx < 0) { setMessage('Select an element with a bbox before autofilling its palette.', true); return; }
+  pushUndoMaybe();
+  if (!autofillPaletteForIndex(selectedIdx)) { setMessage('Selected element has no usable bbox to sample.', true); return; }
+  markDirty(); renderElements(); draw(); setMessage('Palette autofilled from selected bbox.');
+}
+function autofillAllPalettes() {
+  if (!doc) return;
+  pushUndoMaybe();
+  let n = 0;
+  elements().forEach((_, i) => { if (autofillPaletteForIndex(i)) n++; });
+  if (!n) { setMessage('No element bboxes were available to sample.', true); return; }
+  markDirty(); renderElements(); draw(); setMessage(`Autofilled ${n} palette${n === 1 ? '' : 's'} from bboxes.`);
+}
+function stripSelectedPalette() {
+  const el = elements()[selectedIdx];
+  if (!el || !Object.prototype.hasOwnProperty.call(el, 'color_palette')) return;
+  pushUndoMaybe(); delete el.color_palette; markDirty(); renderElements(); setMessage('Removed selected element palette.');
+}
+function stripAllPalettes() {
+  if (!doc) return;
+  pushUndoMaybe();
+  let n = 0;
+  elements().forEach((el) => { if (Object.prototype.hasOwnProperty.call(el, 'color_palette')) { delete el.color_palette; n++; } });
+  markDirty(); renderElements(); setMessage(`Removed ${n} element palette${n === 1 ? '' : 's'}.`);
+}
+function startPalettePick() {
+  if (selectedIdx < 0) { setMessage('Select an element, then click the image to pick its palette color.', true); return; }
+  colorPickIdx = selectedIdx;
+  setMode('pickColor');
+  setMessage('Click the image to set the selected element palette color.');
+}
+function pickPaletteFromPoint(i, p) {
+  const el = elements()[i];
+  if (!el) return;
+  const hex = colorAtCanvasPoint(p);
+  if (!hex) { setMessage('Click inside the image to pick a palette color.', true); return; }
+  pushUndoMaybe(); setElementPalette(i, [hex]); markDirty(); renderElements(); selectIdx(i); setMode('select'); draw(); setMessage(`Picked ${hex} for element #${i + 1}.`);
 }
 
 /* ---------------- issues ---------------- */
@@ -926,7 +1043,7 @@ function updateReadout(p) {
 function setCanvasCursor(p) {
   if (drag) return;
   if (spaceHeld) { imageCanvas.style.cursor = 'grab'; return; }
-  if (mode === 'draw') { imageCanvas.style.cursor = 'crosshair'; return; }
+  if (mode === 'draw' || mode === 'pickColor') { imageCanvas.style.cursor = 'crosshair'; return; }
   const h = p ? handleHit(p) : null;
   if (h) { imageCanvas.style.cursor = HANDLE_CURSOR[h]; return; }
   imageCanvas.style.cursor = hoverIdx >= 0 ? 'move' : 'default';
@@ -949,6 +1066,12 @@ imageCanvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (e.button !== 0) return;
+  if (mode === 'pickColor') {
+    const idx = colorPickIdx !== null ? colorPickIdx : selectedIdx;
+    pickPaletteFromPoint(idx, p);
+    e.preventDefault();
+    return;
+  }
   if (mode === 'draw') {
     pushUndoMaybe();
     const ip = toImg(p);
@@ -983,7 +1106,7 @@ imageCanvas.addEventListener('pointermove', (e) => {
     updateReadout(p);
     if (hoverIdx >= 0) showBoxTip(e.clientX, e.clientY, elements()[hoverIdx], hoverIdx);
     else hideBoxTip();
-    if (mode === 'draw') draw(); // crosshair follows
+    if (mode === 'draw' || mode === 'pickColor') draw(); // crosshair follows
     return;
   }
   if (drag.kind === 'pan') {
@@ -1086,8 +1209,10 @@ imageCanvas.addEventListener('pointerleave', () => { lastPointer = null; hoverId
 function setMode(m) {
   mode = m;
   if (m !== 'draw') { drawSticky = false; pendingDrawIdx = null; }
+  if (m !== 'pickColor') colorPickIdx = null;
   modeSelectBtn.classList.toggle('active', m === 'select');
   modeDrawBtn.classList.toggle('active', m === 'draw');
+  if (pickPaletteBtn) pickPaletteBtn.classList.toggle('active', m === 'pickColor');
   setCanvasCursor(lastPointer);
   draw();
 }
@@ -1805,7 +1930,7 @@ document.addEventListener('keydown', (ev) => {
     else if (k === 'y') { ev.preventDefault(); redo(); }
     return;
   }
-  if (ev.target.matches('input, textarea, select')) {
+  if (ev.target.matches('input, textarea, select, button') || ev.target.isContentEditable) {
     if (ev.key === 'Escape') ev.target.blur();
     lastKeyWasArrow = false;
     return;
@@ -1822,7 +1947,9 @@ document.addEventListener('keydown', (ev) => {
   else if (k === 'n' || k === 'N') { moveToNextUnrated(); }
   else if (k === 'v' || k === 'V') { setMode('select'); }
   else if (k === 'b' || k === 'B') { drawSticky = true; setMode('draw'); }
-  else if (k === 'f' || k === 'F') { fitView(); draw(); }
+  else if (k === 'p' || k === 'P') { startPalettePick(); }
+  else if (k === 'a' || k === 'A') { autofillSelectedPalette(); }
+  else if (k === 'f' || k === 'F') { ev.preventDefault(); fitView(); draw(); }
   else if (k === 'Escape') {
     if (anyDrawerOpen()) closeDrawers();
     else if (mode === 'draw') setMode('select');
@@ -1862,6 +1989,10 @@ clearStatusBtn.addEventListener('click', clearStatus);
 nextJsonIssueBtn.addEventListener('click', () => moveToNextProblem('json'));
 nextBoxIssueBtn.addEventListener('click', () => moveToNextProblem('box'));
 nextMissingCaptionBtn.addEventListener('click', () => moveToNextProblem('missing'));
+autofillPaletteBtn.addEventListener('click', (ev) => { ev.shiftKey ? autofillAllPalettes() : autofillSelectedPalette(); });
+pickPaletteBtn.addEventListener('click', startPalettePick);
+stripPaletteBtn.addEventListener('click', stripSelectedPalette);
+stripAllPalettesBtn.addEventListener('click', () => { if (confirm('Remove color_palette from every element in this caption?')) stripAllPalettes(); });
 saveCaptionBtn.addEventListener('click', () => saveCaption(false));
 saveNextBtn.addEventListener('click', () => saveAndNext(false));
 saveFixedBtn.addEventListener('click', () => saveCaption(true));

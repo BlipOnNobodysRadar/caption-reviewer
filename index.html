@@ -321,7 +321,11 @@
         <div class="elements-head">
           <strong>Elements</strong>
           <span id="elementsCount" class="muted">0</span>
-          <span class="muted hint">click a card or a box to select; Draw box binds the next drag</span>
+          <button id="autofillPalette" class="mini" title="Autofill selected palette from its bbox average color (A). Shift-click fills all boxed elements.">Auto palette</button>
+          <button id="pickPalette" class="mini" title="Pick selected element palette by clicking the image (P)">Pick color</button>
+          <button id="stripPalette" class="mini" title="Remove color_palette from selected element">Strip palette</button>
+          <button id="stripAllPalettes" class="mini danger" title="Remove color_palette from every element">Strip all</button>
+          <span class="muted hint">click a card or box to select; A autofills, P picks</span>
         </div>
         <div id="elementsList" class="elements-list"></div>
       </div>
