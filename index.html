@@ -203,6 +203,83 @@
         <button id="clearStatus" title="Clear the current rating">Clear</button>
       </div>
 
+
+
+      <details class="ai-edit-panel">
+        <summary>Experimental AI Edit</summary>
+        <div class="ai-edit-body">
+          <p class="muted">Ask a running local llama.cpp-compatible loaded local vision model to edit the current caption. Images are sent only to the configured backend URL.</p>
+          <p class="ai-mode-hint">Targeted edit operations are enabled by default, so the model can return only bbox/element changes instead of a full recaption.</p>
+          <label class="fld">Edit request
+            <textarea id="aiEditRequest" rows="3" placeholder="Add bboxes for Ashe's hood and hands." spellcheck="false"></textarea>
+          </label>
+          <div class="setup-row">
+            <button id="aiAskBtn" class="primary">Ask local model</button>
+            <button id="aiApplyBtn" class="hidden">Apply AI result</button>
+            <button id="aiDiscardBtn" class="hidden">Discard AI result</button>
+          </div>
+          <div id="aiStatus" class="raw-status"></div>
+          <div id="aiRemoteWarning" class="notice warn hidden">Warning: this backend URL is not localhost/127.0.0.1. Images will be sent to that configured address.</div>
+          <div id="aiDiff" class="ai-diff hidden"></div>
+          <div id="aiReview" class="ai-review hidden">
+            <div class="ai-preview-grid">
+              <div class="ai-preview-card">
+                <strong>Before</strong>
+                <canvas id="aiBeforeCanvas"></canvas>
+              </div>
+              <div class="ai-preview-card">
+                <strong>After</strong>
+                <canvas id="aiAfterCanvas"></canvas>
+              </div>
+            </div>
+            <div class="ai-change-head">
+              <strong>Apply selected changes</strong>
+              <button id="aiSelectAllBtn" class="mini">Select all</button>
+              <button id="aiSelectNoneBtn" class="mini">Select none</button>
+            </div>
+            <div id="aiChangeList" class="ai-change-list"></div>
+          </div>
+          <details class="setup">
+            <summary>AI settings</summary>
+            <div class="setup-body compact">
+              <label class="inline"><input type="checkbox" id="aiEnabled" checked> enabled</label>
+              <label class="fld">Base URL <input id="aiBaseUrl" value="http://localhost:8080" spellcheck="false"></label>
+              <label class="fld">Endpoint path <input id="aiEndpointPath" value="/v1/chat/completions" spellcheck="false"></label>
+              <label class="fld">Model <input id="aiModel" value="local-model" spellcheck="false"></label>
+              <label class="fld">Response format
+                <select id="aiResponseMode">
+                  <option value="ops" selected>targeted edit operations (recommended)</option>
+                  <option value="full">full caption JSON fallback</option>
+                </select>
+              </label>
+              <div class="fld-grid three">
+                <label class="fld">Max tokens <input id="aiMaxTokens" type="number" value="8192" min="1"></label>
+                <label class="fld">Temperature <input id="aiTemperature" type="number" value="0.1" min="0" max="2" step="0.05"></label>
+                <label class="fld">Timeout sec <input id="aiTimeout" type="number" value="120" min="1"></label>
+              </div>
+              <label class="inline"><input type="checkbox" id="aiSendOriginal" checked> send original image</label>
+              <label class="inline"><input type="checkbox" id="aiSendOverlay" checked> send bbox overlay image</label>
+              <label class="inline"><input type="checkbox" id="aiAutoApply"> apply automatically if valid</label>
+              <label class="fld">Overlay max size <input id="aiOverlayMax" type="number" value="1400" min="256"></label>
+              <label class="inline"><input type="checkbox" id="aiIncludeRawJson" checked> include raw JSON</label>
+              <label class="inline"><input type="checkbox" id="aiIncludePrettyJson" checked> include pretty JSON</label>
+              <label class="inline"><input type="checkbox" id="aiIncludePromptTemplate" checked> include current prompt template</label>
+            </div>
+          </details>
+          <details class="setup">
+            <summary>Prompt template</summary>
+            <div class="setup-body">
+              <textarea id="aiPromptTemplate" rows="15" spellcheck="false"></textarea>
+              <button id="aiResetPromptBtn" class="mini">Reset prompt template</button>
+            </div>
+          </details>
+          <details id="aiRawWrap" class="setup hidden">
+            <summary>Raw model response</summary>
+            <textarea id="aiRawResponse" rows="8" readonly spellcheck="false"></textarea>
+          </details>
+        </div>
+      </details>
+
       <div class="tabs">
         <button id="tabFieldsBtn" class="tab active" title="Edit caption in friendly fields">Fields</button>
         <button id="tabRawBtn" class="tab" title="Edit the caption JSON directly">Raw JSON</button>
@@ -303,6 +380,32 @@
       </details>
     </div>
   </aside>
+
+
+
+  <!-- AI before/after overlay modal -->
+  <div id="aiOverlayModal" class="ai-overlay-modal hidden" role="dialog" aria-modal="true" aria-labelledby="aiOverlayTitle">
+    <div class="ai-overlay-bar">
+      <strong id="aiOverlayTitle">AI overlay preview</strong>
+      <span class="spacer"></span>
+      <button id="aiOverlayZoomOut" class="bar-btn" title="Zoom out">&#8722;</button>
+      <span id="aiOverlayZoomLabel" class="zoom-label">100%</span>
+      <button id="aiOverlayZoomIn" class="bar-btn" title="Zoom in">+</button>
+      <button id="aiOverlayFit" class="bar-btn" title="Fit image">Fit</button>
+      <button id="aiOverlayClose" class="bar-btn icon" title="Close">&times;</button>
+    </div>
+    <div class="ai-overlay-compare">
+      <section class="ai-overlay-pane">
+        <strong>Before</strong>
+        <canvas id="aiOverlayBeforeCanvas"></canvas>
+      </section>
+      <section class="ai-overlay-pane">
+        <strong>After</strong>
+        <canvas id="aiOverlayAfterCanvas"></canvas>
+      </section>
+    </div>
+    <div class="ai-overlay-help">Mouse wheel zooms both panes. Drag either pane to pan both. Double-click or Fit resets both views. Esc closes.</div>
+  </div>
 
   <!-- floating per-box caption tooltip -->
   <div id="boxTip" class="box-tip hidden"></div>

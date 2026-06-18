@@ -132,7 +132,8 @@ function writePrefs() {
       search: searchBox.value, recentFolders: recentFolders.slice(0, 10),
       lastFolder: lastOpenedFolder || targetFolder.value || '', lastActiveRel: activeRel || '',
       autoRepairJson: autoRepairJson.checked, activeTab,
-      browseOpen: browseDrawer.classList.contains('open'), editorOpen: editorDrawer.classList.contains('open')
+      browseOpen: browseDrawer.classList.contains('open'), editorOpen: editorDrawer.classList.contains('open'),
+      ai: lastPrefs.ai || {}
     }));
   } catch (e) { /* ignore (private mode / quota) */ }
 }
@@ -1189,6 +1190,535 @@ convertBtn.addEventListener('click', () => {
   setMessage('Converted to a structured caption template.');
 });
 
+/* ---------------- experimental AI edit ---------------- */
+const DEFAULT_AI_PROMPT_TEMPLATE = `You edit Ideogram4 structured caption JSON for one image.
+
+{response_format_instructions}
+
+Visual inputs:
+- original image = visual truth
+- overlay image = current boxes/labels to fix or reference
+
+Rules:
+- Make only the requested change; preserve unrelated content.
+- Bboxes are normalized grid coordinates, not pixels and not center/width/height.
+- Active bbox format is {coordinate_format}, max {coordinate_max}; for Ideogram default this is [y_min, x_min, y_max, x_max].
+- y values are vertical: top→bottom. x values are horizontal: left→right. Clamp to 0–{coordinate_max}; require y_min < y_max and x_min < x_max.
+- If estimating from pixel xyxy, convert by image dimensions first: y=round(pixel_y/image_height*{coordinate_max}), x=round(pixel_x/image_width*{coordinate_max}), then output yxyx.
+- Tight boxes are better than broad boxes; omit uncertain/diffuse boxes rather than guessing.
+- For new obj elements include type, bbox, desc, and color_palette only if useful.
+- For text elements include type="text", bbox, exact visible text, and desc; do not guess unreadable letters.
+- Existing element field edits should use update_element with index and fields; set_field with element_index/field/value is accepted if needed.
+
+Filename: {filename}
+Selected element: {selected_element_summary}
+Elements:
+{element_summaries}
+Validation issues: {validation_issues}
+
+Current caption JSON:
+{current_caption_json}
+
+User request:
+{user_request}`;
+
+const aiEditRequest = $('aiEditRequest'), aiAskBtn = $('aiAskBtn'), aiApplyBtn = $('aiApplyBtn'), aiDiscardBtn = $('aiDiscardBtn');
+const aiStatus = $('aiStatus'), aiRemoteWarning = $('aiRemoteWarning'), aiDiff = $('aiDiff'), aiRawWrap = $('aiRawWrap'), aiRawResponse = $('aiRawResponse');
+const aiReview = $('aiReview'), aiBeforeCanvas = $('aiBeforeCanvas'), aiAfterCanvas = $('aiAfterCanvas'), aiChangeList = $('aiChangeList');
+const aiSelectAllBtn = $('aiSelectAllBtn'), aiSelectNoneBtn = $('aiSelectNoneBtn');
+const aiOverlayModal = $('aiOverlayModal'), aiOverlayBeforeCanvas = $('aiOverlayBeforeCanvas'), aiOverlayAfterCanvas = $('aiOverlayAfterCanvas'), aiOverlayTitle = $('aiOverlayTitle');
+const aiOverlayZoomOut = $('aiOverlayZoomOut'), aiOverlayZoomIn = $('aiOverlayZoomIn'), aiOverlayFit = $('aiOverlayFit'), aiOverlayClose = $('aiOverlayClose'), aiOverlayZoomLabel = $('aiOverlayZoomLabel');
+const aiEnabled = $('aiEnabled'), aiBaseUrl = $('aiBaseUrl'), aiEndpointPath = $('aiEndpointPath'), aiModel = $('aiModel'), aiResponseMode = $('aiResponseMode');
+const aiMaxTokens = $('aiMaxTokens'), aiTemperature = $('aiTemperature'), aiTimeout = $('aiTimeout'), aiSendOriginal = $('aiSendOriginal');
+const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiOverlayMax = $('aiOverlayMax');
+const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiIncludePrettyJson'), aiIncludePromptTemplate = $('aiIncludePromptTemplate');
+const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn');
+let pendingAiCaption = null;
+let pendingAiBeforeCaption = null;
+let pendingAiOps = null;
+let aiOverlayState = { before: null, after: null, scale: 1, ox: 0, oy: 0, drag: null };
+
+function aiSettingsFromUi() {
+  return {
+    base_url: aiBaseUrl.value.trim() || 'http://localhost:8080',
+    endpoint_path: aiEndpointPath.value.trim() || '/v1/chat/completions',
+    model: aiModel.value.trim() || 'local-model',
+    max_tokens: Number(aiMaxTokens.value) || 8192,
+    temperature: Number(aiTemperature.value) || 0.1,
+    timeout_seconds: Number(aiTimeout.value) || 120,
+    send_original_image: aiSendOriginal.checked,
+    send_overlay_image: aiSendOverlay.checked,
+    overlay_max_size: Number(aiOverlayMax.value) || 1400,
+    include_raw_json: aiIncludeRawJson.checked,
+    include_pretty_json: aiIncludePrettyJson.checked,
+    include_current_prompt_template: aiIncludePromptTemplate.checked,
+  };
+}
+function isLocalAiUrl() {
+  try {
+    const u = new URL(aiBaseUrl.value.trim() || 'http://localhost:8080', window.location.href);
+    return ['localhost', '127.0.0.1', '::1'].includes(u.hostname);
+  } catch (e) { return false; }
+}
+function updateAiRemoteWarning() { aiRemoteWarning.classList.toggle('hidden', isLocalAiUrl()); }
+function saveAiPrefs() {
+  const p = lastPrefs || {};
+  p.ai = {
+    enabled: aiEnabled.checked, baseUrl: aiBaseUrl.value, endpointPath: aiEndpointPath.value, model: aiModel.value,
+    maxTokens: aiMaxTokens.value, temperature: aiTemperature.value, timeout: aiTimeout.value,
+    sendOriginal: aiSendOriginal.checked, sendOverlay: aiSendOverlay.checked, autoApply: aiAutoApply.checked,
+    overlayMax: aiOverlayMax.value, includeRawJson: aiIncludeRawJson.checked, includePrettyJson: aiIncludePrettyJson.checked,
+    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value
+  };
+  lastPrefs = p;
+  writePrefs();
+}
+function initAiPrefs() {
+  const p = (lastPrefs && lastPrefs.ai) || {};
+  aiPromptTemplate.value = p.promptTemplate || DEFAULT_AI_PROMPT_TEMPLATE;
+  if (typeof p.enabled === 'boolean') aiEnabled.checked = p.enabled;
+  if (p.baseUrl) aiBaseUrl.value = p.baseUrl;
+  if (p.endpointPath) aiEndpointPath.value = p.endpointPath;
+  if (p.model) aiModel.value = p.model;
+  if (p.responseMode) aiResponseMode.value = p.responseMode;
+  if (p.maxTokens) aiMaxTokens.value = p.maxTokens;
+  if (p.temperature) aiTemperature.value = p.temperature;
+  if (p.timeout) aiTimeout.value = p.timeout;
+  if (typeof p.sendOriginal === 'boolean') aiSendOriginal.checked = p.sendOriginal;
+  if (typeof p.sendOverlay === 'boolean') aiSendOverlay.checked = p.sendOverlay;
+  if (typeof p.autoApply === 'boolean') aiAutoApply.checked = p.autoApply;
+  if (p.overlayMax) aiOverlayMax.value = p.overlayMax;
+  if (typeof p.includeRawJson === 'boolean') aiIncludeRawJson.checked = p.includeRawJson;
+  if (typeof p.includePrettyJson === 'boolean') aiIncludePrettyJson.checked = p.includePrettyJson;
+  if (typeof p.includePromptTemplate === 'boolean') aiIncludePromptTemplate.checked = p.includePromptTemplate;
+  updateAiRemoteWarning();
+}
+function aiResponseFormatInstructions() {
+  if (aiResponseMode.value === 'full') {
+    return `IMPORTANT RESPONSE FORMAT:
+Return ONLY one JSON object. First character must be { and last must be }.
+Do not use markdown, code fences, comments, or explanation.
+Return a complete edited caption JSON object. Preserve unrelated content.`;
+  }
+  return `IMPORTANT RESPONSE FORMAT:
+Return ONLY one JSON object. First character must be { and last must be }.
+Do not use markdown, code fences, comments, or explanation.
+Prefer {"caption_edits":[...]} with only requested changes.
+Use update_element/add_element/remove_element/set_field. Do not include unchanged or unrelated elements.
+Full caption JSON is accepted only as a fallback.`;
+}
+function aiPromptForRequest() {
+  const base = aiPromptTemplate.value || DEFAULT_AI_PROMPT_TEMPLATE;
+  const instructions = aiResponseFormatInstructions();
+  return base.includes('{response_format_instructions}')
+    ? base.replaceAll('{response_format_instructions}', instructions)
+    : instructions + '\n\n' + base;
+}
+function aiValidationIssues() {
+  return doc ? C.validateDoc(doc, coordMax()).map((x) => `${x.label}: ${x.msg}`) : [];
+}
+function summarizeAiDiff(before, after) {
+  const b = (before && C.getElements(before)) || [], a = (after && C.getElements(after)) || [];
+  const lines = [];
+  if (a.length > b.length) lines.push(`Added ${a.length - b.length} element(s).`);
+  if (a.length < b.length) lines.push(`Removed ${b.length - a.length} element(s).`);
+  const n = Math.min(a.length, b.length);
+  let bboxChanged = 0, descChanged = 0, typeChanged = 0;
+  for (let i = 0; i < n; i++) {
+    if (JSON.stringify(a[i].bbox) !== JSON.stringify(b[i].bbox)) bboxChanged++;
+    if (String(a[i].desc || '') !== String(b[i].desc || '')) descChanged++;
+    if (String(a[i].type || '') !== String(b[i].type || '')) typeChanged++;
+  }
+  if (bboxChanged) lines.push(`Changed ${bboxChanged} bbox(es).`);
+  if (descChanged) lines.push(`Changed ${descChanged} description(s).`);
+  if (typeChanged) lines.push(`Changed ${typeChanged} element type(s).`);
+  for (const k of ['high_level_description', 'style_description', 'compositional_deconstruction']) {
+    if (JSON.stringify(before && before[k]) !== JSON.stringify(after && after[k]) && k !== 'compositional_deconstruction') lines.push(`Changed ${k}.`);
+  }
+  return lines.length ? lines.join('\n') : 'No obvious structural changes detected.';
+}
+function cloneJson(value) { return JSON.parse(JSON.stringify(value)); }
+function aiElementLabel(el, i) {
+  if (!el) return `element ${i + 1}`;
+  const desc = String(el.desc || el.description || el.text || '').trim().replace(/\s+/g, ' ').slice(0, 90);
+  return `#${i + 1} ${el.type || 'obj'}${desc ? ': ' + desc : ''}`;
+}
+function aiNonElementChanged(before, after) {
+  if (!before || !after) return false;
+  if (JSON.stringify(before.high_level_description) !== JSON.stringify(after.high_level_description)) return true;
+  if (JSON.stringify(before.style_description) !== JSON.stringify(after.style_description)) return true;
+  const bc = before.compositional_deconstruction || {}, ac = after.compositional_deconstruction || {};
+  const stripElements = (obj) => {
+    const copy = Object.assign({}, obj || {});
+    delete copy.elements;
+    return copy;
+  };
+  return JSON.stringify(stripElements(bc)) !== JSON.stringify(stripElements(ac));
+}
+function selectedAiChangeKeys() {
+  return new Set(Array.from(aiChangeList.querySelectorAll('input[data-change-key]:checked')).map((el) => el.dataset.changeKey));
+}
+function mergeSelectedAiCaption(before, after) {
+  if (!before || !after) return after;
+  const selected = selectedAiChangeKeys();
+  const merged = cloneJson(before);
+  if (selected.has('top')) {
+    if (Object.prototype.hasOwnProperty.call(after, 'high_level_description')) merged.high_level_description = cloneJson(after.high_level_description);
+    if (Object.prototype.hasOwnProperty.call(after, 'style_description')) merged.style_description = cloneJson(after.style_description);
+    if (after.compositional_deconstruction && typeof after.compositional_deconstruction === 'object') {
+      if (!merged.compositional_deconstruction || typeof merged.compositional_deconstruction !== 'object') merged.compositional_deconstruction = {};
+      for (const [k, v] of Object.entries(after.compositional_deconstruction)) {
+        if (k !== 'elements') merged.compositional_deconstruction[k] = cloneJson(v);
+      }
+    }
+  }
+  const bEls = C.getElements(before) || [];
+  const aEls = C.getElements(after) || [];
+  const outEls = [];
+  const n = Math.max(bEls.length, aEls.length);
+  for (let i = 0; i < n; i++) {
+    const b = bEls[i], a = aEls[i];
+    if (b && a) outEls.push(selected.has('el-change-' + i) ? cloneJson(a) : cloneJson(b));
+    else if (b && !a) { if (!selected.has('el-remove-' + i)) outEls.push(cloneJson(b)); }
+    else if (!b && a) { if (selected.has('el-add-' + i)) outEls.push(cloneJson(a)); }
+  }
+  C.getElements(merged, { create: true }).splice(0, C.getElements(merged, { create: true }).length, ...outEls);
+  return merged;
+}
+function drawCaptionOverlayAt(pctx, caption, geom, opts = {}) {
+  const arr = (caption && C.getElements(caption)) || [];
+  const labelFont = opts.labelFont || '700 11px system-ui';
+  const lineWidth = opts.lineWidth || 2;
+  pctx.textBaseline = 'top'; pctx.font = labelFont;
+  for (let i = 0; i < arr.length; i++) {
+    const r = C.bboxToRect(arr[i].bbox, order(), coordMax(), img.naturalWidth, img.naturalHeight);
+    if (!r) continue;
+    const color = C.colorForIndex(i);
+    const x = geom.ox + r.left * geom.scale, y = geom.oy + r.top * geom.scale;
+    const w = r.width * geom.scale, h = r.height * geom.scale;
+    pctx.strokeStyle = color; pctx.lineWidth = lineWidth; pctx.strokeRect(x, y, w, h);
+    const text = C.shortLabel(arr[i], i);
+    const tw = Math.min(geom.width - x - 4, pctx.measureText(text).width + 8);
+    const ly = Math.max(0, y - 15);
+    pctx.fillStyle = color; pctx.fillRect(x, ly, Math.max(30, tw), 15);
+    pctx.fillStyle = '#0c0e14'; pctx.fillText(text, x + 4, ly + 2);
+  }
+}
+function elementDiffDetails(beforeEl, afterEl) {
+  const fields = ['type', 'bbox', 'desc', 'description', 'text', 'color_palette'];
+  const lines = [];
+  for (const key of fields) {
+    const bv = beforeEl ? beforeEl[key] : undefined;
+    const av = afterEl ? afterEl[key] : undefined;
+    if (JSON.stringify(bv) !== JSON.stringify(av)) {
+      lines.push(`${key}: ${JSON.stringify(bv)} → ${JSON.stringify(av)}`);
+    }
+  }
+  const extra = new Set([...Object.keys(beforeEl || {}), ...Object.keys(afterEl || {})]);
+  for (const key of extra) {
+    if (fields.includes(key)) continue;
+    const bv = beforeEl ? beforeEl[key] : undefined;
+    const av = afterEl ? afterEl[key] : undefined;
+    if (JSON.stringify(bv) !== JSON.stringify(av)) lines.push(`${key}: ${JSON.stringify(bv)} → ${JSON.stringify(av)}`);
+  }
+  return lines;
+}
+function drawAiPreview(canvas, caption) {
+  if (!canvas || !imgLoaded || !caption) return;
+  const cssW = Math.max(220, canvas.clientWidth || 300), cssH = Math.max(160, canvas.clientHeight || 180);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
+  const pctx = canvas.getContext('2d');
+  pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  pctx.clearRect(0, 0, cssW, cssH);
+  pctx.fillStyle = '#05070c'; pctx.fillRect(0, 0, cssW, cssH);
+  const margin = 8;
+  const scale = Math.min((cssW - margin * 2) / img.naturalWidth, (cssH - margin * 2) / img.naturalHeight);
+  const ox = (cssW - img.naturalWidth * scale) / 2, oy = (cssH - img.naturalHeight * scale) / 2;
+  pctx.drawImage(img, ox, oy, img.naturalWidth * scale, img.naturalHeight * scale);
+  drawCaptionOverlayAt(pctx, caption, { ox, oy, scale, width: cssW, height: cssH });
+}
+function parseAiOpsFromRaw(raw) {
+  let text = String(raw || '').trim();
+  if (!text) return null;
+  if (text.startsWith('```')) {
+    const lines = text.split(/\r?\n/);
+    if (lines.length >= 3 && ['```', '```json'].includes(lines[0].trim().toLowerCase()) && lines[lines.length - 1].trim() === '```') {
+      text = lines.slice(1, -1).join('\n').trim();
+    }
+  }
+  let obj = null;
+  try { obj = JSON.parse(text); } catch (e) { return null; }
+  const ops = obj && (obj.caption_edits || obj.edits || obj.operations);
+  return Array.isArray(ops) ? ops.map(normalizeClientAiOp).filter(Boolean) : null;
+}
+function normalizeClientAiOp(op) {
+  if (!op || typeof op !== 'object' || Array.isArray(op)) return null;
+  if (op.op || op.type) return Object.assign({}, op, { op: String(op.op || op.type || '').toLowerCase() });
+  const keys = ['update_element', 'add_element', 'remove_element', 'set_field', 'update', 'add', 'remove', 'set'].filter((k) => Object.prototype.hasOwnProperty.call(op, k));
+  if (keys.length !== 1) return null;
+  const key = keys[0], value = op[key];
+  if ((key === 'add' || key === 'add_element') && value && typeof value === 'object') return { op: 'add_element', element: cloneJson(value) };
+  if ((key === 'update' || key === 'update_element') && value && typeof value === 'object') return Object.assign({ op: 'update_element' }, cloneJson(value));
+  if (key === 'remove' || key === 'remove_element') return { op: 'remove_element', index: Number.isInteger(value) ? value : value && value.index };
+  if ((key === 'set' || key === 'set_field') && value && typeof value === 'object') {
+    if (Number.isInteger(value.element_index) && typeof value.field === 'string') return { op: 'update_element', index: value.element_index, fields: { [value.field]: cloneJson(value.value) } };
+    return Object.assign({ op: 'set_field' }, cloneJson(value));
+  }
+  return null;
+}
+function summarizeAiOps(ops) {
+  const counts = { add: 0, update: 0, remove: 0, set: 0 };
+  for (const op of ops || []) {
+    const kind = String(op.op || '').toLowerCase();
+    if (kind.includes('add')) counts.add++;
+    else if (kind.includes('update') || kind.includes('modify')) counts.update++;
+    else if (kind.includes('remove') || kind.includes('delete')) counts.remove++;
+    else if (kind.includes('set')) counts.set++;
+  }
+  const lines = [];
+  if (counts.add) lines.push(`Added ${counts.add} element(s).`);
+  if (counts.update) lines.push(`Updated ${counts.update} element(s).`);
+  if (counts.remove) lines.push(`Removed ${counts.remove} element(s).`);
+  if (counts.set) lines.push(`Changed ${counts.set} non-element field(s).`);
+  return lines.length ? lines.join('\n') : 'No edit operations returned.';
+}
+function renderAiChangeListFromOps(before, ops) {
+  aiChangeList.innerHTML = '';
+  const beforeEls = (before && C.getElements(before)) || [];
+  const addItem = (key, title, detail, checked = true) => {
+    const label = document.createElement('label');
+    label.className = 'ai-change-item';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = checked; cb.dataset.changeKey = key;
+    const body = document.createElement('span');
+    body.innerHTML = `${escapeText(title)}${detail ? `<span class="muted ai-change-detail">${escapeText(detail)}</span>` : ''}`;
+    label.append(cb, body);
+    aiChangeList.appendChild(label);
+  };
+  (ops || []).forEach((op, i) => {
+    const key = 'op-' + i;
+    const kind = String(op.op || '').toLowerCase();
+    if (kind === 'add' || kind === 'add_element') addItem(key, `Add ${aiElementLabel(op.element, beforeEls.length + i)}`, `bbox=${JSON.stringify(op.element && op.element.bbox)}`);
+    else if (kind === 'update' || kind === 'update_element' || kind === 'modify_element') addItem(key, `Update ${aiElementLabel(beforeEls[op.index], op.index)}`, Object.entries(op.fields || {}).map(([k, v]) => `${k}: ${JSON.stringify(beforeEls[op.index] && beforeEls[op.index][k])} → ${JSON.stringify(v)}`).join('\n'));
+    else if (kind === 'remove' || kind === 'remove_element' || kind === 'delete_element') addItem(key, `Remove ${aiElementLabel(beforeEls[op.index], op.index)}`, `index=${op.index}`);
+    else if (kind === 'set' || kind === 'set_field') addItem(key, `Set ${Array.isArray(op.path) ? op.path.join('.') : op.path}`, `value=${JSON.stringify(op.value)}`);
+  });
+  if (!aiChangeList.children.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'No edit operations detected.';
+    aiChangeList.appendChild(empty);
+  }
+}
+function mergeSelectedAiOps(before, ops) {
+  const selected = selectedAiChangeKeys();
+  const merged = cloneJson(before);
+  const elems = C.getElements(merged, { create: true });
+  const removals = [];
+  (ops || []).forEach((op, i) => {
+    if (!selected.has('op-' + i)) return;
+    const kind = String(op.op || '').toLowerCase();
+    if ((kind === 'add' || kind === 'add_element') && op.element) {
+      const at = Number.isInteger(op.index) ? Math.max(0, Math.min(elems.length, op.index)) : elems.length;
+      elems.splice(at, 0, cloneJson(op.element));
+    } else if ((kind === 'update' || kind === 'update_element' || kind === 'modify_element') && Number.isInteger(op.index) && elems[op.index] && op.fields) {
+      Object.assign(elems[op.index], cloneJson(op.fields));
+    } else if ((kind === 'remove' || kind === 'remove_element' || kind === 'delete_element') && Number.isInteger(op.index)) {
+      removals.push(op.index);
+    } else if ((kind === 'set' || kind === 'set_field') && Number.isInteger(op.element_index) && typeof op.field === 'string' && elems[op.element_index]) {
+      elems[op.element_index][op.field] = cloneJson(op.value);
+    } else if ((kind === 'set' || kind === 'set_field') && op.path) {
+      const parts = Array.isArray(op.path) ? op.path : String(op.path).split('.').filter(Boolean);
+      if (!parts.includes('elements')) {
+        let cur = merged;
+        for (const part of parts.slice(0, -1)) {
+          if (!cur[part] || typeof cur[part] !== 'object') cur[part] = {};
+          cur = cur[part];
+        }
+        cur[parts[parts.length - 1]] = cloneJson(op.value);
+      }
+    }
+  });
+  for (const idx of [...new Set(removals)].sort((a, b) => b - a)) if (idx >= 0 && idx < elems.length) elems.splice(idx, 1);
+  return merged;
+}
+function renderAiChangeList(before, after) {
+  aiChangeList.innerHTML = '';
+  const addItem = (key, title, detail, checked = true) => {
+    const label = document.createElement('label');
+    label.className = 'ai-change-item';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = checked; cb.dataset.changeKey = key;
+    const body = document.createElement('span');
+    body.innerHTML = `${escapeText(title)}${detail ? `<span class="muted ai-change-detail">${escapeText(detail)}</span>` : ''}`;
+    label.append(cb, body);
+    aiChangeList.appendChild(label);
+  };
+  if (aiNonElementChanged(before, after)) addItem('top', 'High-level/style/background fields changed', 'Apply non-element caption field changes.');
+  const b = (before && C.getElements(before)) || [], a = (after && C.getElements(after)) || [];
+  const n = Math.max(b.length, a.length);
+  for (let i = 0; i < n; i++) {
+    if (b[i] && a[i] && JSON.stringify(b[i]) !== JSON.stringify(a[i])) addItem('el-change-' + i, `Changed ${aiElementLabel(a[i], i)}`, elementDiffDetails(b[i], a[i]).join('\n'));
+    else if (!b[i] && a[i]) addItem('el-add-' + i, `Added ${aiElementLabel(a[i], i)}`, `bbox=${JSON.stringify(a[i].bbox)}`);
+    else if (b[i] && !a[i]) addItem('el-remove-' + i, `Removed ${aiElementLabel(b[i], i)}`, `Original bbox=${JSON.stringify(b[i].bbox)}`);
+  }
+  if (!aiChangeList.children.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'No element-level differences detected.';
+    aiChangeList.appendChild(empty);
+  }
+}
+function fitAiOverlayModal() {
+  if (!imgLoaded || !aiOverlayState.before || !aiOverlayState.after) return;
+  const rect = aiOverlayBeforeCanvas.getBoundingClientRect();
+  const margin = 32;
+  aiOverlayState.scale = Math.min((rect.width - margin) / img.naturalWidth, (rect.height - margin) / img.naturalHeight);
+  aiOverlayState.scale = Math.max(0.02, Math.min(32, aiOverlayState.scale));
+  aiOverlayState.ox = (rect.width - img.naturalWidth * aiOverlayState.scale) / 2;
+  aiOverlayState.oy = (rect.height - img.naturalHeight * aiOverlayState.scale) / 2;
+  drawAiOverlayModal();
+}
+function drawAiOverlayModal() {
+  if (aiOverlayModal.classList.contains('hidden') || !imgLoaded || !aiOverlayState.before || !aiOverlayState.after) return;
+  const dpr = window.devicePixelRatio || 1;
+  const drawPane = (canvas, caption) => {
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    canvas.height = Math.max(1, Math.round(rect.height * dpr));
+    const mctx = canvas.getContext('2d');
+    mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    mctx.clearRect(0, 0, rect.width, rect.height);
+    mctx.fillStyle = '#05070c'; mctx.fillRect(0, 0, rect.width, rect.height);
+    mctx.imageSmoothingEnabled = aiOverlayState.scale < 2.5;
+    mctx.drawImage(img, aiOverlayState.ox, aiOverlayState.oy, img.naturalWidth * aiOverlayState.scale, img.naturalHeight * aiOverlayState.scale);
+    drawCaptionOverlayAt(mctx, caption, {
+      ox: aiOverlayState.ox, oy: aiOverlayState.oy, scale: aiOverlayState.scale,
+      width: rect.width, height: rect.height
+    }, { labelFont: '700 13px system-ui', lineWidth: 2.5 });
+  };
+  drawPane(aiOverlayBeforeCanvas, aiOverlayState.before);
+  drawPane(aiOverlayAfterCanvas, aiOverlayState.after);
+  aiOverlayZoomLabel.textContent = Math.round(aiOverlayState.scale * 100) + '%';
+}
+function openAiOverlayModal() {
+  if (!pendingAiBeforeCaption || !pendingAiCaption || !imgLoaded) return;
+  aiOverlayState = { before: pendingAiBeforeCaption, after: pendingAiCaption, scale: 1, ox: 0, oy: 0, drag: null };
+  aiOverlayTitle.textContent = 'AI Edit before/after overlay comparison';
+  aiOverlayModal.classList.remove('hidden');
+  requestAnimationFrame(fitAiOverlayModal);
+}
+function closeAiOverlayModal() {
+  aiOverlayModal.classList.add('hidden');
+  aiOverlayState.drag = null;
+  aiOverlayBeforeCanvas.classList.remove('dragging');
+  aiOverlayAfterCanvas.classList.remove('dragging');
+}
+function zoomAiOverlay(factor, center) {
+  if (!aiOverlayState.before || !aiOverlayState.after) return;
+  const rect = aiOverlayBeforeCanvas.getBoundingClientRect();
+  const p = center || { x: rect.width / 2, y: rect.height / 2 };
+  const ix = (p.x - aiOverlayState.ox) / aiOverlayState.scale;
+  const iy = (p.y - aiOverlayState.oy) / aiOverlayState.scale;
+  aiOverlayState.scale = Math.max(0.02, Math.min(32, aiOverlayState.scale * factor));
+  aiOverlayState.ox = p.x - ix * aiOverlayState.scale;
+  aiOverlayState.oy = p.y - iy * aiOverlayState.scale;
+  drawAiOverlayModal();
+}
+function renderAiReview(before, after, ops = null) {
+  if (!before || !after) { aiReview.classList.add('hidden'); return; }
+  if (ops && ops.length) renderAiChangeListFromOps(before, ops);
+  else renderAiChangeList(before, after);
+  aiReview.classList.remove('hidden');
+  requestAnimationFrame(() => { drawAiPreview(aiBeforeCanvas, before); drawAiPreview(aiAfterCanvas, after); });
+}
+function applyAiCaption(caption) {
+  if (!caption) return;
+  pushUndoMaybe();
+  doc = cloneJson(caption);
+  plain = false; parseError = null; parseRepaired = false; parseRepairKind = '';
+  rawDirtyPending = false;
+  markDirty();
+  renderFieldsTop(); renderElements(); refreshIssues();
+  if (activeTab === 'raw') syncRawFromDoc();
+  draw();
+  setMessage('Applied AI result as an unsaved edit.');
+}
+function applySelectedAiChanges() {
+  if (!pendingAiCaption) return;
+  applyAiCaption(pendingAiOps && pendingAiOps.length ? mergeSelectedAiOps(pendingAiBeforeCaption, pendingAiOps) : mergeSelectedAiCaption(pendingAiBeforeCaption, pendingAiCaption));
+}
+async function askAiEdit() {
+  if (!aiEnabled.checked) { aiStatus.textContent = 'AI Edit is disabled.'; aiStatus.className = 'raw-status error'; return; }
+  if (!activeRel || !doc) { aiStatus.textContent = 'Open a structured caption first.'; aiStatus.className = 'raw-status error'; return; }
+  const reqText = aiEditRequest.value.trim();
+  if (!reqText) { aiStatus.textContent = 'Enter an edit request.'; aiStatus.className = 'raw-status error'; return; }
+  updateAiRemoteWarning(); saveAiPrefs(); pendingAiCaption = null; pendingAiBeforeCaption = null; pendingAiOps = null;
+  aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiRawWrap.classList.add('hidden'); aiReview.classList.add('hidden');
+  aiAskBtn.disabled = true; aiStatus.textContent = 'Asking local model…'; aiStatus.className = 'raw-status';
+  const before = cloneJson(doc);
+  try {
+    const res = await fetch('/api/ai-edit-caption', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image_path: activeRel, caption: doc, user_request: reqText, coordinate_format: order(), coordinate_max: coordMax(),
+        selected_element_index: selectedIdx, validation_issues: aiValidationIssues(), settings: aiSettingsFromUi(),
+        prompt_template: aiPromptForRequest()
+      })
+    });
+    const out = await res.json();
+    aiRawResponse.value = out.raw_model_response || '';
+    aiRawWrap.classList.toggle('hidden', !out.raw_model_response);
+    if (!out.ok) {
+      const details = out.validation && Array.isArray(out.validation.errors) && out.validation.errors.length ? ': ' + out.validation.errors.join('; ') : '';
+      throw new Error((out.error || 'AI edit failed') + details);
+    }
+    pendingAiCaption = out.caption;
+    pendingAiBeforeCaption = before;
+    pendingAiOps = out.debug && out.debug.response_mode === 'ops' ? parseAiOpsFromRaw(out.raw_model_response) : null;
+    const modeLabel = out.debug && out.debug.response_mode ? ` (${out.debug.response_mode})` : '';
+    aiStatus.textContent = (out.validation && out.validation.valid ? 'Received valid AI-edited caption' : 'Received AI result') + modeLabel + '.';
+    aiStatus.className = 'raw-status ok';
+    aiDiff.textContent = pendingAiOps && pendingAiOps.length ? summarizeAiOps(pendingAiOps) : summarizeAiDiff(before, pendingAiCaption);
+    aiDiff.classList.remove('hidden');
+    renderAiReview(before, pendingAiCaption, pendingAiOps);
+    aiDiscardBtn.classList.remove('hidden');
+    if (aiAutoApply.checked) applyAiCaption(pendingAiCaption);
+    else aiApplyBtn.classList.remove('hidden');
+  } catch (e) {
+    aiStatus.textContent = e.message;
+    aiStatus.className = 'raw-status error';
+  } finally {
+    aiAskBtn.disabled = false;
+  }
+}
+aiAskBtn.addEventListener('click', askAiEdit);
+aiApplyBtn.addEventListener('click', () => { applySelectedAiChanges(); aiApplyBtn.classList.add('hidden'); });
+aiDiscardBtn.addEventListener('click', () => { pendingAiCaption = null; pendingAiBeforeCaption = null; pendingAiOps = null; aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiReview.classList.add('hidden'); aiStatus.textContent = 'AI result discarded.'; });
+aiSelectAllBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = true; });
+aiSelectNoneBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = false; });
+aiBeforeCanvas.addEventListener('click', openAiOverlayModal);
+aiAfterCanvas.addEventListener('click', openAiOverlayModal);
+aiOverlayClose.addEventListener('click', closeAiOverlayModal);
+aiOverlayFit.addEventListener('click', fitAiOverlayModal);
+aiOverlayZoomIn.addEventListener('click', () => zoomAiOverlay(1.25));
+aiOverlayZoomOut.addEventListener('click', () => zoomAiOverlay(0.8));
+for (const modalCanvas of [aiOverlayBeforeCanvas, aiOverlayAfterCanvas]) {
+  modalCanvas.addEventListener('dblclick', fitAiOverlayModal);
+  modalCanvas.addEventListener('wheel', (ev) => { ev.preventDefault(); const r = modalCanvas.getBoundingClientRect(); zoomAiOverlay(ev.deltaY < 0 ? 1.12 : 0.89, { x: ev.clientX - r.left, y: ev.clientY - r.top }); }, { passive: false });
+  modalCanvas.addEventListener('pointerdown', (ev) => { if (!aiOverlayState.before || !aiOverlayState.after) return; aiOverlayState.drag = { x: ev.clientX, y: ev.clientY, ox: aiOverlayState.ox, oy: aiOverlayState.oy }; modalCanvas.setPointerCapture(ev.pointerId); aiOverlayBeforeCanvas.classList.add('dragging'); aiOverlayAfterCanvas.classList.add('dragging'); });
+  modalCanvas.addEventListener('pointermove', (ev) => { const d = aiOverlayState.drag; if (!d) return; aiOverlayState.ox = d.ox + ev.clientX - d.x; aiOverlayState.oy = d.oy + ev.clientY - d.y; drawAiOverlayModal(); });
+  modalCanvas.addEventListener('pointerup', () => { aiOverlayState.drag = null; aiOverlayBeforeCanvas.classList.remove('dragging'); aiOverlayAfterCanvas.classList.remove('dragging'); });
+  modalCanvas.addEventListener('pointercancel', () => { aiOverlayState.drag = null; aiOverlayBeforeCanvas.classList.remove('dragging'); aiOverlayAfterCanvas.classList.remove('dragging'); });
+}
+aiResetPromptBtn.addEventListener('click', () => { aiPromptTemplate.value = DEFAULT_AI_PROMPT_TEMPLATE; saveAiPrefs(); });
+window.addEventListener('resize', () => { if (!aiOverlayModal.classList.contains('hidden')) drawAiOverlayModal(); });
+for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate]) {
+  el.addEventListener('change', () => { updateAiRemoteWarning(); saveAiPrefs(); });
+  el.addEventListener('input', debounce(() => { updateAiRemoteWarning(); saveAiPrefs(); }, 300));
+}
+
 /* ---------------- save ---------------- */
 function buildSaveText() {
   if (doc && (activeTab === 'fields' || !rawDirtyPending)) {
@@ -1259,6 +1789,7 @@ async function saveAndNext(markFixed = false) {
 
 /* ---------------- keyboard ---------------- */
 document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && aiOverlayModal && !aiOverlayModal.classList.contains('hidden')) { closeAiOverlayModal(); ev.preventDefault(); return; }
   if (ev.key === ' ' && !ev.target.matches('input, textarea, select, button')) {
     spaceHeld = true;
     setCanvasCursor(lastPointer);
@@ -1788,6 +2319,7 @@ bResizeObserver.observe(bImageWrap);
 
 /* ---------------- init ---------------- */
 loadPrefs();
+initAiPrefs();
 if (typeof lastPrefs.browseOpen === 'boolean') browseDrawer.classList.toggle('open', lastPrefs.browseOpen);
 if (typeof lastPrefs.editorOpen === 'boolean') editorDrawer.classList.toggle('open', lastPrefs.editorOpen);
 if (lastPrefs.activeTab === 'raw') activeTab = 'raw';
