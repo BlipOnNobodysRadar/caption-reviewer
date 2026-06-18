@@ -351,7 +351,7 @@ input, select, textarea {
 .fld textarea, .fld input, .fld select { resize: vertical; font-size: 13px; padding: 6px 8px; }
 .fld-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
-.elements-head { display: flex; align-items: center; gap: 8px; margin-top: 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+.elements-head { display: flex; align-items: center; gap: 8px; margin-top: 4px; border-top: 1px solid var(--border); padding-top: 8px; flex-wrap: wrap; }
 .elements-head .hint { margin-left: auto; font-size: 11px; text-align: right; }
 .elements-list { display: flex; flex-direction: column; gap: 8px; }
 
@@ -366,7 +366,12 @@ input, select, textarea {
 .coord { display: flex; align-items: center; gap: 3px; color: var(--muted); font-size: 11px; }
 .coord input { width: 64px; padding: 4px 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .no-box { color: var(--muted); font-size: 12px; font-style: italic; }
-.el-pal { font-size: 12px; padding: 5px 7px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.palette-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.el-pal { font-size: 12px; padding: 5px 7px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; flex: 1; min-width: 0; }
+.palette-chips { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; min-height: 18px; }
+.palette-swatch { width: 14px; height: 14px; border: 1px solid rgba(255,255,255,.55); border-radius: 3px; box-shadow: 0 0 0 1px rgba(0,0,0,.35); padding: 0; flex: none; }
+button.palette-swatch { cursor: pointer; }
+button.palette-swatch:hover { transform: scale(1.12); }
 
 .raw-panel { display: flex; flex-direction: column; gap: 8px; }
 .caption-head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 13px; }
