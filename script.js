@@ -29,6 +29,7 @@ const fldArt = $('fld_art'), fldMedium = $('fld_medium'), fldStylePalette = $('f
 const fldBackground = $('fld_background');
 const elementsCount = $('elementsCount'), elementsList = $('elementsList');
 const autofillPaletteBtn = $('autofillPalette'), pickPaletteBtn = $('pickPalette'), stripPaletteBtn = $('stripPalette'), stripAllPalettesBtn = $('stripAllPalettes');
+const batchAutofillPalettesBtn = $('batchAutofillPalettes'), batchRepairJsonBtn = $('batchRepairJson');
 const captionText = $('captionText'), captionPath = $('captionPath');
 const rawApplyBtn = $('rawApplyBtn'), repairJsonBtn = $('repairJsonBtn'), rawStatus = $('rawStatus');
 const saveFormat = $('saveFormat'), saveCaptionBtn = $('saveCaption'), saveFixedBtn = $('saveFixed');
@@ -530,12 +531,30 @@ function renderPaletteChips(values, owner, onRemove) {
   });
   return wrap;
 }
+function cleanPaletteValues(values) {
+  const out = [];
+  for (const v of values) {
+    const clean = normalizeHex(v) || String(v).trim();
+    if (clean && !out.includes(clean)) out.push(clean);
+  }
+  return out;
+}
 function setElementPalette(i, values) {
   const el = elements()[i];
   if (!el) return;
-  const clean = values.map((v) => normalizeHex(v) || String(v).trim()).filter(Boolean);
+  const clean = cleanPaletteValues(values);
   if (clean.length) el.color_palette = clean;
   else delete el.color_palette;
+}
+function addElementPaletteColor(i, value) {
+  const el = elements()[i];
+  if (!el) return false;
+  const clean = normalizeHex(value) || String(value || '').trim();
+  if (!clean) return false;
+  const vals = cleanPaletteValues(Array.isArray(el.color_palette) ? el.color_palette : []);
+  if (!vals.includes(clean)) vals.push(clean);
+  el.color_palette = vals;
+  return true;
 }
 
 function renderFieldsTop() {
@@ -786,18 +805,18 @@ function rgbDistanceSq(a, b) {
   const dr = a.r - b.r, dg = a.g - b.g, db = a.b - b.b;
   return dr * dr + dg * dg + db * db;
 }
-function extractRectPixels(rect) {
-  if (!imgLoaded || !rect || rect.width <= 0 || rect.height <= 0) return null;
+function extractRectPixels(rect, sourceImg = img) {
+  if (!sourceImg || !rect || rect.width <= 0 || rect.height <= 0) return null;
   const c = document.createElement('canvas');
   const w = Math.max(1, Math.round(rect.width));
   const h = Math.max(1, Math.round(rect.height));
   c.width = w; c.height = h;
   const ictx = c.getContext('2d', { willReadFrequently: true });
-  ictx.drawImage(img, rect.left, rect.top, rect.width, rect.height, 0, 0, w, h);
+  ictx.drawImage(sourceImg, rect.left, rect.top, rect.width, rect.height, 0, 0, w, h);
   return { data: ictx.getImageData(0, 0, w, h).data, w, h };
 }
-function sampleImageRectColors(rect, maxColors = 5) {
-  const pixels = extractRectPixels(rect);
+function sampleImageRectColors(rect, maxColors = 5, sourceImg = img) {
+  const pixels = extractRectPixels(rect, sourceImg);
   if (!pixels) return [];
   const { data } = pixels;
   const bins = new Map();
@@ -826,8 +845,8 @@ function sampleImageRectColors(rect, maxColors = 5) {
   if (!picked.length && candidates.length) picked.push(candidates[0]);
   return picked.map((c) => rgbToHex(c.r, c.g, c.b));
 }
-function sampleImageRect(rect) {
-  return sampleImageRectColors(rect, 1)[0] || '';
+function sampleImageRect(rect, sourceImg = img) {
+  return sampleImageRectColors(rect, 1, sourceImg)[0] || '';
 }
 function colorAtCanvasPoint(p) {
   if (!imgLoaded || !p) return '';
@@ -839,7 +858,7 @@ function autofillPaletteForIndex(i) {
   const el = elements()[i];
   if (!el || !Array.isArray(el.bbox)) return false;
   const rect = rectOf(i);
-  const colors = sampleImageRectColors(rect, 5);
+  const colors = sampleImageRectColors(rect, 5, img);
   if (!colors.length) return false;
   setElementPalette(i, colors);
   return true;
@@ -870,6 +889,115 @@ function stripAllPalettes() {
   elements().forEach((el) => { if (Object.prototype.hasOwnProperty.call(el, 'color_palette')) { delete el.color_palette; n++; } });
   markDirty(); renderElements(); setMessage(`Removed ${n} element palette${n === 1 ? '' : 's'}.`);
 }
+
+async function datasetItems() {
+  const params = new URLSearchParams({ status: 'all', sort: 'filename', recursive: recursive.checked ? 'true' : 'false' });
+  const res = await fetch('/api/list?' + params.toString());
+  const out = await res.json();
+  if (out.error) throw new Error(out.error);
+  return out.items || [];
+}
+async function saveCaptionForRel(rel, text) {
+  const res = await fetch('/api/save-caption', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rel, caption: text, mark_fixed: false, backup: backupOriginals.checked })
+  });
+  const out = await res.json();
+  if (out.error) throw new Error(out.error);
+  return out;
+}
+function loadImageForRel(rel) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Could not load image.'));
+    image.src = mediaUrl(rel);
+  });
+}
+function autofillDocPalettesFromImage(targetDoc, sourceImg) {
+  const arr = C.getElements(targetDoc) || [];
+  let changed = 0;
+  for (const el of arr) {
+    const rect = C.bboxToRect(el.bbox, order(), coordMax(), sourceImg.naturalWidth, sourceImg.naturalHeight);
+    if (!rect) continue;
+    const colors = sampleImageRectColors(rect, 5, sourceImg);
+    if (!colors.length) continue;
+    const next = cleanPaletteValues(colors);
+    if (JSON.stringify(el.color_palette || []) === JSON.stringify(next)) continue;
+    el.color_palette = next;
+    changed++;
+  }
+  return changed;
+}
+async function batchAutofillPalettes() {
+  if (dirty && !confirm('Current caption has unsaved changes. Continue without saving them first?')) return;
+  const all = await datasetItems();
+  if (!all.length) { setMessage('No dataset items loaded.', true); return; }
+  if (!confirm(`Autofill color_palette fields for all ${all.length} loaded dataset item(s)? Existing element palettes will be replaced when a bbox can be sampled. Original captions are backed up according to your backup setting.`)) return;
+  batchAutofillPalettesBtn.disabled = true; batchRepairJsonBtn.disabled = true;
+  let saved = 0, skipped = 0, failed = 0, changedElements = 0;
+  try {
+    for (let idx = 0; idx < all.length; idx++) {
+      const rel = all[idx].rel;
+      setMessage(`Autofilling palettes ${idx + 1}/${all.length}: ${rel}`);
+      try {
+        const text = await loadCaptionForRel(rel);
+        const parsed = C.parseCaptionDoc(text, { repair: autoRepairJson.checked });
+        if (!parsed.doc) { skipped++; continue; }
+        const sourceImg = await loadImageForRel(rel);
+        const changed = autofillDocPalettesFromImage(parsed.doc, sourceImg);
+        if (!changed) { skipped++; continue; }
+        await saveCaptionForRel(rel, C.serializeDoc(parsed.doc, saveFormat.value !== 'minified'));
+        saved++; changedElements += changed;
+      } catch (e) {
+        console.warn('Palette batch failed for', rel, e);
+        failed++;
+      }
+    }
+  } finally {
+    batchAutofillPalettesBtn.disabled = false; batchRepairJsonBtn.disabled = false;
+  }
+  await refreshList(true);
+  if (activeRel) {
+    dirty = false;
+    await loadItem(activeRel);
+    updateDirtyUi();
+  }
+  setMessage(`Dataset palette autofill saved ${saved} caption${saved === 1 ? '' : 's'} (${changedElements} element${changedElements === 1 ? '' : 's'} changed), skipped ${skipped}, failed ${failed}${failed ? ' — see console.' : ''}${failed ? '' : '.'}`, !!failed);
+}
+async function batchRepairJson() {
+  if (dirty && !confirm('Current caption has unsaved changes. Continue without saving them first?')) return;
+  const all = await datasetItems();
+  if (!all.length) { setMessage('No dataset items loaded.', true); return; }
+  if (!confirm(`Auto-repair and save JSON captions for all ${all.length} loaded dataset item(s)? Plain-text captions and unrepairable JSON will be skipped. Original captions are backed up according to your backup setting.`)) return;
+  batchAutofillPalettesBtn.disabled = true; batchRepairJsonBtn.disabled = true;
+  let saved = 0, skipped = 0, failed = 0;
+  try {
+    for (let idx = 0; idx < all.length; idx++) {
+      const rel = all[idx].rel;
+      setMessage(`Repairing JSON ${idx + 1}/${all.length}: ${rel}`);
+      try {
+        const text = await loadCaptionForRel(rel);
+        const parsed = C.parseCaptionDoc(text, { repair: true });
+        if (!parsed.doc || !parsed.repaired) { skipped++; continue; }
+        await saveCaptionForRel(rel, C.serializeDoc(parsed.doc, saveFormat.value !== 'minified'));
+        saved++;
+      } catch (e) {
+        console.warn('JSON repair batch failed for', rel, e);
+        failed++;
+      }
+    }
+  } finally {
+    batchAutofillPalettesBtn.disabled = false; batchRepairJsonBtn.disabled = false;
+  }
+  await refreshList(true);
+  if (activeRel) {
+    dirty = false;
+    await loadItem(activeRel);
+    updateDirtyUi();
+  }
+  setMessage(`Dataset JSON repair saved ${saved} caption${saved === 1 ? '' : 's'}, skipped ${skipped}, failed ${failed}${failed ? ' — see console.' : ''}${failed ? '' : '.'}`, !!failed);
+}
 function startPalettePick() {
   if (selectedIdx < 0) { setMessage('Select an element, then click the image to pick its palette color.', true); return; }
   colorPickIdx = selectedIdx;
@@ -881,7 +1009,7 @@ function pickPaletteFromPoint(i, p) {
   if (!el) return;
   const hex = colorAtCanvasPoint(p);
   if (!hex) { setMessage('Click inside the image to pick a palette color.', true); return; }
-  pushUndoMaybe(); setElementPalette(i, [hex]); markDirty(); renderElements(); selectIdx(i); setMode('select'); draw(); setMessage(`Picked ${hex} for element #${i + 1}.`);
+  pushUndoMaybe(); addElementPaletteColor(i, hex); markDirty(); renderElements(); selectIdx(i); setMessage(`Added ${hex} to element #${i + 1} palette. Click more colors, or press Esc/V when done.`);
 }
 
 /* ---------------- issues ---------------- */
@@ -1982,7 +2110,7 @@ document.addEventListener('keydown', (ev) => {
   else if (k === 'f' || k === 'F') { ev.preventDefault(); fitView(); draw(); }
   else if (k === 'Escape') {
     if (anyDrawerOpen()) closeDrawers();
-    else if (mode === 'draw') setMode('select');
+    else if (mode === 'draw' || mode === 'pickColor') setMode('select');
     else selectIdx(-1);
   } else if ((k === 'Delete' || k === 'Backspace') && selectedIdx >= 0) {
     ev.preventDefault();
@@ -2023,6 +2151,8 @@ autofillPaletteBtn.addEventListener('click', (ev) => { ev.shiftKey ? autofillAll
 pickPaletteBtn.addEventListener('click', startPalettePick);
 stripPaletteBtn.addEventListener('click', stripSelectedPalette);
 stripAllPalettesBtn.addEventListener('click', () => { if (confirm('Remove color_palette from every element in this caption?')) stripAllPalettes(); });
+batchAutofillPalettesBtn.addEventListener('click', () => batchAutofillPalettes().catch((e) => setMessage(e.message || String(e), true)));
+batchRepairJsonBtn.addEventListener('click', () => batchRepairJson().catch((e) => setMessage(e.message || String(e), true)));
 saveCaptionBtn.addEventListener('click', () => saveCaption(false));
 saveNextBtn.addEventListener('click', () => saveAndNext(false));
 saveFixedBtn.addEventListener('click', () => saveCaption(true));
