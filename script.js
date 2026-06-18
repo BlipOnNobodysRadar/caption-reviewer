@@ -1208,6 +1208,7 @@ Rules:
 - Tight boxes are better than broad boxes; omit uncertain/diffuse boxes rather than guessing.
 - For new obj elements include type, bbox, desc, and color_palette only if useful.
 - For text elements include type="text", bbox, exact visible text, and desc; do not guess unreadable letters.
+- Existing element field edits should use update_element with index and fields; set_field with element_index/field/value is accepted if needed.
 
 Filename: {filename}
 Selected element: {selected_element_summary}
@@ -1460,7 +1461,10 @@ function normalizeClientAiOp(op) {
   if ((key === 'add' || key === 'add_element') && value && typeof value === 'object') return { op: 'add_element', element: cloneJson(value) };
   if ((key === 'update' || key === 'update_element') && value && typeof value === 'object') return Object.assign({ op: 'update_element' }, cloneJson(value));
   if (key === 'remove' || key === 'remove_element') return { op: 'remove_element', index: Number.isInteger(value) ? value : value && value.index };
-  if ((key === 'set' || key === 'set_field') && value && typeof value === 'object') return Object.assign({ op: 'set_field' }, cloneJson(value));
+  if ((key === 'set' || key === 'set_field') && value && typeof value === 'object') {
+    if (Number.isInteger(value.element_index) && typeof value.field === 'string') return { op: 'update_element', index: value.element_index, fields: { [value.field]: cloneJson(value.value) } };
+    return Object.assign({ op: 'set_field' }, cloneJson(value));
+  }
   return null;
 }
 function summarizeAiOps(ops) {
@@ -1522,6 +1526,8 @@ function mergeSelectedAiOps(before, ops) {
       Object.assign(elems[op.index], cloneJson(op.fields));
     } else if ((kind === 'remove' || kind === 'remove_element' || kind === 'delete_element') && Number.isInteger(op.index)) {
       removals.push(op.index);
+    } else if ((kind === 'set' || kind === 'set_field') && Number.isInteger(op.element_index) && typeof op.field === 'string' && elems[op.element_index]) {
+      elems[op.element_index][op.field] = cloneJson(op.value);
     } else if ((kind === 'set' || kind === 'set_field') && op.path) {
       const parts = Array.isArray(op.path) ? op.path : String(op.path).split('.').filter(Boolean);
       if (!parts.includes('elements')) {

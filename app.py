@@ -400,7 +400,10 @@ def normalize_ai_edit_ops(obj: Any) -> tuple[list[dict[str, Any]] | None, str | 
                 elif key in ("remove", "remove_element"):
                     op = {"op": "remove_element", "index": value if isinstance(value, int) else (value or {}).get("index") if isinstance(value, dict) else value}
                 elif key in ("set", "set_field") and isinstance(value, dict):
-                    op = {"op": "set_field", **value}
+                    if isinstance(value.get("element_index"), int) and isinstance(value.get("field"), str):
+                        op = {"op": "update_element", "index": value["element_index"], "fields": {value["field"]: value.get("value")}}
+                    else:
+                        op = {"op": "set_field", **value}
         out.append(op)
     return out, None
 
@@ -444,6 +447,13 @@ def apply_ai_edit_ops(current_caption: dict[str, Any], ops: list[dict[str, Any]]
                 continue
             removals.append(index)
         elif kind in ("set", "set_field"):
+            if isinstance(op.get("element_index"), int) and isinstance(op.get("field"), str):
+                index = op["element_index"]
+                if index < 0 or index >= len(elems):
+                    errors.append(f"Operation {op_num}: set_field element_index is out of range.")
+                    continue
+                elems[index][op["field"]] = json.loads(json.dumps(op.get("value")))
+                continue
             path = op.get("path")
             if isinstance(path, str):
                 path = [part for part in path.split(".") if part]
