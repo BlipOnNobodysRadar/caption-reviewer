@@ -1031,7 +1031,7 @@ function pickPaletteFromPoint(i, p) {
   if (!el) return;
   const hex = colorAtCanvasPoint(p);
   if (!hex) { setMessage('Click inside the image to pick a palette color.', true); return; }
-  pushUndoMaybe(); markPaletteManual(i); addElementPaletteColor(i, hex); markDirty(); renderElements(); selectIdx(i); setMessage(`Added ${hex} to element #${i + 1} palette. Click more colors, or press Esc/V when done.`);
+  pushUndoMaybe(); markPaletteManual(i); addElementPaletteColor(i, hex); markDirty(); renderElements(); selectIdx(i); setMode('select'); draw(); setMessage(`Added ${hex} to element #${i + 1} palette. Press P again to pick another color.`);
 }
 
 /* ---------------- issues ---------------- */
