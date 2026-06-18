@@ -987,6 +987,12 @@ def save_caption():
     items = state.setdefault("items", {})
     entry = items.setdefault(rel, {})
     entry["caption_saved_at"] = now_ts()
+    if "manual_palette_bboxes" in data:
+        raw_keys = data.get("manual_palette_bboxes")
+        if isinstance(raw_keys, list):
+            entry["manual_palette_bboxes"] = sorted(
+                {str(k) for k in raw_keys if isinstance(k, (str, int, float)) and str(k)}
+            )
     if mark_fixed:
         entry["status"] = "fixed"
         entry["updated_at"] = now_ts()
