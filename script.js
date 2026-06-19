@@ -37,6 +37,10 @@ const removePairBtn = $('removePair'), deletePairBtn = $('deletePair');
 const saveStatus = $('saveStatus');
 const saveNextBtn = $('saveNext'), advanceOnRate = $('advanceOnRate'), autoRepairJson = $('autoRepairJson');
 const posIndicator = $('posIndicator'), recentFoldersList = $('recentFolders');
+const goalTracker = $('goalTracker'), goalCollapseBtn = $('goalCollapse'), goalHeadline = $('goalHeadline'), goalStats = $('goalStats');
+const goalExpanded = $('goalExpanded'), goalSetup = $('goalSetup'), goalTargetInput = $('goalTarget'), goalStartBtn = $('goalStart');
+const goalActive = $('goalActive'), goalProgressFill = $('goalProgressFill'), goalProgressText = $('goalProgressText');
+const goalPauseBtn = $('goalPause'), goalResetBtn = $('goalReset'), goalCancelBtn = $('goalCancel');
 /* layout: app-bar toggles, slide-in drawers, floating hover tooltip */
 const browseToggle = $('browseToggle'), editorToggle = $('editorToggle');
 const browseClose = $('browseClose'), editorClose = $('editorClose');
@@ -134,6 +138,7 @@ function loadPrefs() {
   if (Array.isArray(p.recentFolders)) recentFolders = p.recentFolders.filter((x) => typeof x === 'string');
   if (p.lastFolder && !targetFolder.value) targetFolder.value = p.lastFolder;
   renderRecentFolders();
+  loadGoalPrefs();
 }
 function writePrefs() {
   try {
@@ -146,6 +151,7 @@ function writePrefs() {
       search: searchBox.value, recentFolders: recentFolders.slice(0, 10),
       lastFolder: lastOpenedFolder || targetFolder.value || '', lastActiveRel: activeRel || '',
       autoRepairJson: autoRepairJson.checked, activeTab,
+      goal: goalPrefs(),
       browseOpen: browseDrawer.classList.contains('open'), editorOpen: editorDrawer.classList.contains('open'),
       ai: lastPrefs.ai || {}
     }));
@@ -167,6 +173,124 @@ function rememberFolder(path) {
   recentFolders = [path, ...recentFolders.filter((p) => p !== path)].slice(0, 10);
   renderRecentFolders();
   writePrefs();
+}
+
+
+/* ---------------- rating goal tracker ---------------- */
+const GOAL_IDLE_MS = 90 * 1000;
+let goal = {
+  active: false,
+  target: 25,
+  completed: 0,
+  elapsedMs: 0,
+  running: false,
+  paused: false,
+  idle: false,
+  collapsed: true,
+  lastTick: Date.now(),
+  lastActivity: Date.now(),
+  finishedAt: null
+};
+let goalTimer = null;
+
+function loadGoalPrefs() {
+  const g = lastPrefs.goal || {};
+  if (Number.isFinite(g.target) && g.target > 0) goal.target = Math.floor(g.target);
+  if (Number.isFinite(g.completed) && g.completed >= 0) goal.completed = Math.floor(g.completed);
+  if (Number.isFinite(g.elapsedMs) && g.elapsedMs >= 0) goal.elapsedMs = g.elapsedMs;
+  if (typeof g.active === 'boolean') goal.active = g.active;
+  if (typeof g.paused === 'boolean') goal.paused = g.paused;
+  if (typeof g.collapsed === 'boolean') goal.collapsed = g.collapsed;
+  goal.running = goal.active && !goal.paused && goal.completed < goal.target;
+  goal.idle = false;
+  goal.lastTick = Date.now();
+  goal.lastActivity = Date.now();
+  if (goalTargetInput) goalTargetInput.value = goal.target;
+  renderGoal();
+  ensureGoalTimer();
+}
+function goalPrefs() {
+  return {
+    active: goal.active, target: goal.target, completed: goal.completed,
+    elapsedMs: Math.round(goal.elapsedMs), paused: goal.paused, collapsed: goal.collapsed
+  };
+}
+function formatDuration(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), sec = total % 60;
+  if (h) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m) return `${m}m ${String(sec).padStart(2, '0')}s`;
+  return `${sec}s`;
+}
+function renderGoal() {
+  if (!goalTracker) return;
+  goalTracker.classList.toggle('goal-collapsed', goal.collapsed);
+  goalTracker.classList.toggle('goal-running', goal.active && goal.running && !goal.idle);
+  goalTracker.classList.toggle('goal-paused', goal.active && (!goal.running || goal.paused || goal.idle));
+  goalTracker.classList.toggle('goal-done', goal.active && goal.completed >= goal.target);
+  goalCollapseBtn.textContent = goal.collapsed ? '▸' : '▾';
+  goalSetup.classList.toggle('hidden', goal.active);
+  goalActive.classList.toggle('hidden', !goal.active);
+  const pct = goal.target ? Math.min(100, (goal.completed / goal.target) * 100) : 0;
+  goalProgressFill.style.width = `${pct}%`;
+  goalProgressText.textContent = `${goal.completed} / ${goal.target}`;
+  if (!goal.active) {
+    goalHeadline.textContent = 'Set a focus goal';
+    goalStats.textContent = 'Track active review time and ETA.';
+    goalPauseBtn.textContent = 'Pause';
+    return;
+  }
+  const left = Math.max(0, goal.target - goal.completed);
+  const avg = goal.completed ? goal.elapsedMs / goal.completed : 0;
+  const eta = avg && left ? formatDuration(avg * left) : '—';
+  const state = goal.completed >= goal.target ? 'Complete' : goal.paused ? 'Paused' : goal.idle ? 'Idle' : 'In progress';
+  goalHeadline.textContent = `${state}: ${goal.completed}/${goal.target} ratings`;
+  goalStats.textContent = `Time ${formatDuration(goal.elapsedMs)} · ETA ${eta}`;
+  goalPauseBtn.textContent = (goal.paused || goal.idle || !goal.running) ? 'Resume' : 'Pause';
+}
+function ensureGoalTimer() {
+  if (goalTimer) return;
+  goalTimer = setInterval(() => {
+    const now = Date.now();
+    if (goal.active && goal.running && !goal.paused && goal.completed < goal.target) {
+      const isIdle = now - goal.lastActivity > GOAL_IDLE_MS;
+      goal.idle = isIdle;
+      if (!isIdle) goal.elapsedMs += Math.max(0, now - goal.lastTick);
+      renderGoal();
+    }
+    goal.lastTick = now;
+  }, 1000);
+}
+function noteGoalActivity() {
+  goal.lastActivity = Date.now();
+  if (goal.active && goal.idle && !goal.paused && goal.completed < goal.target) {
+    goal.idle = false; goal.running = true; goal.lastTick = Date.now(); renderGoal();
+  }
+}
+function startGoal() {
+  const target = Math.max(1, Math.floor(Number(goalTargetInput.value) || goal.target || 25));
+  goal = { ...goal, active: true, target, completed: 0, elapsedMs: 0, running: true, paused: false, idle: false, collapsed: false, lastTick: Date.now(), lastActivity: Date.now(), finishedAt: null };
+  goalTargetInput.value = target;
+  renderGoal(); ensureGoalTimer(); writePrefs();
+}
+function pauseGoal() {
+  if (!goal.active) return;
+  if (goal.completed >= goal.target) return;
+  const resume = goal.paused || goal.idle || !goal.running;
+  goal.paused = !resume;
+  goal.running = resume;
+  goal.idle = false;
+  goal.lastTick = Date.now(); goal.lastActivity = Date.now();
+  renderGoal(); writePrefs();
+}
+function resetGoal() { if (!goal.active) return; goal.completed = 0; goal.elapsedMs = 0; goal.finishedAt = null; goal.running = !goal.paused; goal.lastTick = Date.now(); goal.lastActivity = Date.now(); renderGoal(); writePrefs(); }
+function cancelGoal() { goal.active = false; goal.completed = 0; goal.elapsedMs = 0; goal.running = false; goal.paused = false; goal.idle = false; renderGoal(); writePrefs(); }
+function recordGoalRating() {
+  if (!goal.active || goal.completed >= goal.target) return;
+  noteGoalActivity();
+  goal.completed += 1;
+  if (goal.completed >= goal.target) { goal.completed = goal.target; goal.running = false; goal.paused = false; goal.finishedAt = Date.now(); }
+  renderGoal(); writePrefs();
 }
 
 /* ---------------- undo / redo ---------------- */
@@ -444,6 +568,7 @@ async function setStatus(status) {
   const out = await res.json();
   if (out.error) { setMessage(out.error, true); return; }
   setMessage(`Marked ${out.status_label}.`);
+  recordGoalRating();
   await refreshList(true);
   updateButtons(status);
   activeName.textContent = `${activeRel.split('/').pop()} \u2014 ${out.status_label}`;
@@ -2314,6 +2439,7 @@ async function saveAndNext(markFixed = false) {
 
 /* ---------------- keyboard ---------------- */
 document.addEventListener('keydown', (ev) => {
+  noteGoalActivity();
   if (ev.key === 'Escape' && aiOverlayModal && !aiOverlayModal.classList.contains('hidden')) { closeAiOverlayModal(); ev.preventDefault(); return; }
   if (ev.key === ' ' && !ev.target.matches('input, textarea, select, button')) {
     spaceHeld = true;
@@ -2870,3 +2996,12 @@ if (lastPrefs && lastPrefs.lastFolder) {
   targetFolder.value = lastPrefs.lastFolder;
   openFolder({ preferRel: lastPrefs.lastActiveRel || '', silent: true });
 }
+
+
+if (goalStartBtn) goalStartBtn.addEventListener('click', startGoal);
+if (goalTargetInput) goalTargetInput.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') startGoal(); });
+if (goalPauseBtn) goalPauseBtn.addEventListener('click', pauseGoal);
+if (goalResetBtn) goalResetBtn.addEventListener('click', resetGoal);
+if (goalCancelBtn) goalCancelBtn.addEventListener('click', cancelGoal);
+if (goalCollapseBtn) goalCollapseBtn.addEventListener('click', () => { goal.collapsed = !goal.collapsed; renderGoal(); writePrefs(); });
+['pointerdown', 'mousemove', 'wheel', 'touchstart'].forEach((name) => document.addEventListener(name, noteGoalActivity, { passive: true }));
