@@ -177,7 +177,7 @@ function rememberFolder(path) {
 
 
 /* ---------------- rating goal tracker ---------------- */
-const GOAL_IDLE_MS = 90 * 1000;
+const GOAL_IDLE_MS = 30 * 1000;
 let goal = {
   active: false,
   target: 25,
@@ -189,7 +189,9 @@ let goal = {
   collapsed: true,
   lastTick: Date.now(),
   lastActivity: Date.now(),
-  finishedAt: null
+  finishedAt: null,
+  pageVisible: typeof document === 'undefined' ? true : !document.hidden,
+  windowFocused: typeof document === 'undefined' || !document.hasFocus ? true : document.hasFocus()
 };
 let goalTimer = null;
 
@@ -248,12 +250,15 @@ function renderGoal() {
   goalStats.textContent = `Time ${formatDuration(goal.elapsedMs)} · ETA ${eta}`;
   goalPauseBtn.textContent = (goal.paused || goal.idle || !goal.running) ? 'Resume' : 'Pause';
 }
+function goalCanCountTime() {
+  return goal.pageVisible && goal.windowFocused;
+}
 function ensureGoalTimer() {
   if (goalTimer) return;
   goalTimer = setInterval(() => {
     const now = Date.now();
     if (goal.active && goal.running && !goal.paused && goal.completed < goal.target) {
-      const isIdle = now - goal.lastActivity > GOAL_IDLE_MS;
+      const isIdle = !goalCanCountTime() || now - goal.lastActivity > GOAL_IDLE_MS;
       goal.idle = isIdle;
       if (!isIdle) goal.elapsedMs += Math.max(0, now - goal.lastTick);
       renderGoal();
@@ -263,13 +268,26 @@ function ensureGoalTimer() {
 }
 function noteGoalActivity() {
   goal.lastActivity = Date.now();
-  if (goal.active && goal.idle && !goal.paused && goal.completed < goal.target) {
+  if (goal.active && goal.idle && !goal.paused && goal.completed < goal.target && goalCanCountTime()) {
     goal.idle = false; goal.running = true; goal.lastTick = Date.now(); renderGoal();
   }
 }
+function updateGoalPageActivity({ visible, focused } = {}) {
+  if (typeof visible === 'boolean') goal.pageVisible = visible;
+  if (typeof focused === 'boolean') goal.windowFocused = focused;
+  const now = Date.now();
+  if (!goalCanCountTime()) {
+    goal.idle = true;
+    goal.lastTick = now;
+    renderGoal();
+    return;
+  }
+  goal.lastTick = now;
+  noteGoalActivity();
+}
 function startGoal() {
   const target = Math.max(1, Math.floor(Number(goalTargetInput.value) || goal.target || 25));
-  goal = { ...goal, active: true, target, completed: 0, elapsedMs: 0, running: true, paused: false, idle: false, collapsed: false, lastTick: Date.now(), lastActivity: Date.now(), finishedAt: null };
+  goal = { ...goal, active: true, target, completed: 0, elapsedMs: 0, running: true, paused: false, idle: !goalCanCountTime(), collapsed: false, lastTick: Date.now(), lastActivity: Date.now(), finishedAt: null };
   goalTargetInput.value = target;
   renderGoal(); ensureGoalTimer(); writePrefs();
 }
@@ -279,7 +297,7 @@ function pauseGoal() {
   const resume = goal.paused || goal.idle || !goal.running;
   goal.paused = !resume;
   goal.running = resume;
-  goal.idle = false;
+  goal.idle = resume ? !goalCanCountTime() : false;
   goal.lastTick = Date.now(); goal.lastActivity = Date.now();
   renderGoal(); writePrefs();
 }
@@ -3005,3 +3023,6 @@ if (goalResetBtn) goalResetBtn.addEventListener('click', resetGoal);
 if (goalCancelBtn) goalCancelBtn.addEventListener('click', cancelGoal);
 if (goalCollapseBtn) goalCollapseBtn.addEventListener('click', () => { goal.collapsed = !goal.collapsed; renderGoal(); writePrefs(); });
 ['pointerdown', 'mousemove', 'wheel', 'touchstart'].forEach((name) => document.addEventListener(name, noteGoalActivity, { passive: true }));
+document.addEventListener('visibilitychange', () => updateGoalPageActivity({ visible: !document.hidden }));
+window.addEventListener('blur', () => updateGoalPageActivity({ focused: false }));
+window.addEventListener('focus', () => updateGoalPageActivity({ focused: true }));
