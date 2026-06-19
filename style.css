@@ -494,3 +494,17 @@ body.dirty .active-name::after {
 .ai-change-detail code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: #d7def5; }
 .ai-change-detail { white-space: pre-wrap; }
 .ai-mode-hint { margin: -3px 0 4px; padding: 7px 8px; border: 1px solid #24426e; border-radius: 8px; background: #0d1a2d; color: #a9c7ff; font-size: 12px; }
+.ai-batch-list { display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.ai-batch-item { border: 1px solid #252c3d; border-radius: 8px; padding: 7px; background: #0c1019; display: grid; gap: 5px; font-size: 12px; }
+.ai-batch-item.st-proposed { border-color: #24426e; }
+.ai-batch-item.st-accepted, .ai-batch-item.st-nochange { border-color: #2f6b46; }
+.ai-batch-item.st-failed { border-color: #7a3a3a; }
+.ai-batch-item.st-rejected { opacity: .72; }
+.ai-batch-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+/* Keep AI batch content constrained inside the editor drawer, even for long filenames/errors. */
+#editorDrawer, #editorDrawer .drawer-body, #editorDrawer .setup, #editorDrawer .setup-body, .ai-edit-panel { min-width: 0; }
+#aiBatchStatus { white-space: normal; overflow-wrap: anywhere; }
+.ai-batch-list { min-width: 0; overflow-x: hidden; }
+.ai-batch-item { min-width: 0; max-width: 100%; overflow: hidden; }
+.ai-batch-item > div { min-width: 0; overflow-wrap: anywhere; }
+.ai-batch-item strong { overflow-wrap: anywhere; word-break: break-word; }

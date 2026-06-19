@@ -1535,13 +1535,18 @@ const aiOverlayModal = $('aiOverlayModal'), aiOverlayBeforeCanvas = $('aiOverlay
 const aiOverlayZoomOut = $('aiOverlayZoomOut'), aiOverlayZoomIn = $('aiOverlayZoomIn'), aiOverlayFit = $('aiOverlayFit'), aiOverlayClose = $('aiOverlayClose'), aiOverlayZoomLabel = $('aiOverlayZoomLabel');
 const aiEnabled = $('aiEnabled'), aiBaseUrl = $('aiBaseUrl'), aiEndpointPath = $('aiEndpointPath'), aiModel = $('aiModel'), aiResponseMode = $('aiResponseMode');
 const aiMaxTokens = $('aiMaxTokens'), aiTemperature = $('aiTemperature'), aiTimeout = $('aiTimeout'), aiSendOriginal = $('aiSendOriginal');
-const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiOverlayMax = $('aiOverlayMax');
+const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiSaveTraining = $('aiSaveTraining'), aiOverlayMax = $('aiOverlayMax');
 const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiIncludePrettyJson'), aiIncludePromptTemplate = $('aiIncludePromptTemplate');
 const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn');
+const aiBatchParallel = $('aiBatchParallel'), aiBatchReviewMode = $('aiBatchReviewMode'), aiBatchScope = $('aiBatchScope');
+const aiBatchStart = $('aiBatchStart'), aiBatchPause = $('aiBatchPause'), aiBatchResume = $('aiBatchResume'), aiBatchCancel = $('aiBatchCancel');
+const aiBatchAcceptAll = $('aiBatchAcceptAll'), aiBatchRejectAll = $('aiBatchRejectAll'), aiBatchRetryFailed = $('aiBatchRetryFailed');
+const aiBatchClearSettled = $('aiBatchClearSettled'), aiBatchClearAll = $('aiBatchClearAll'), aiBatchFilter = $('aiBatchFilter'), aiBatchStatus = $('aiBatchStatus'), aiBatchList = $('aiBatchList');
 let pendingAiCaption = null;
 let pendingAiBeforeCaption = null;
 let pendingAiOps = null;
 let aiOverlayState = { before: null, after: null, scale: 1, ox: 0, oy: 0, drag: null };
+let aiBatch = { running: false, paused: false, cancelled: false, queue: [], active: 0, done: 0, results: [], lastRequestText: '' };
 
 function aiSettingsFromUi() {
   return {
@@ -1557,6 +1562,7 @@ function aiSettingsFromUi() {
     include_raw_json: aiIncludeRawJson.checked,
     include_pretty_json: aiIncludePrettyJson.checked,
     include_current_prompt_template: aiIncludePromptTemplate.checked,
+    save_training_data: aiSaveTraining.checked,
   };
 }
 function isLocalAiUrl() {
@@ -1571,9 +1577,9 @@ function saveAiPrefs() {
   p.ai = {
     enabled: aiEnabled.checked, baseUrl: aiBaseUrl.value, endpointPath: aiEndpointPath.value, model: aiModel.value,
     maxTokens: aiMaxTokens.value, temperature: aiTemperature.value, timeout: aiTimeout.value,
-    sendOriginal: aiSendOriginal.checked, sendOverlay: aiSendOverlay.checked, autoApply: aiAutoApply.checked,
+    sendOriginal: aiSendOriginal.checked, sendOverlay: aiSendOverlay.checked, autoApply: aiAutoApply.checked, saveTraining: aiSaveTraining.checked,
     overlayMax: aiOverlayMax.value, includeRawJson: aiIncludeRawJson.checked, includePrettyJson: aiIncludePrettyJson.checked,
-    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value
+    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value, batchParallel: aiBatchParallel.value, batchReviewMode: aiBatchReviewMode.value, batchScope: aiBatchScope.value, batchFilter: aiBatchFilter.value
   };
   lastPrefs = p;
   writePrefs();
@@ -1592,10 +1598,15 @@ function initAiPrefs() {
   if (typeof p.sendOriginal === 'boolean') aiSendOriginal.checked = p.sendOriginal;
   if (typeof p.sendOverlay === 'boolean') aiSendOverlay.checked = p.sendOverlay;
   if (typeof p.autoApply === 'boolean') aiAutoApply.checked = p.autoApply;
+  if (typeof p.saveTraining === 'boolean') aiSaveTraining.checked = p.saveTraining;
   if (p.overlayMax) aiOverlayMax.value = p.overlayMax;
   if (typeof p.includeRawJson === 'boolean') aiIncludeRawJson.checked = p.includeRawJson;
   if (typeof p.includePrettyJson === 'boolean') aiIncludePrettyJson.checked = p.includePrettyJson;
   if (typeof p.includePromptTemplate === 'boolean') aiIncludePromptTemplate.checked = p.includePromptTemplate;
+  if (p.batchParallel) aiBatchParallel.value = p.batchParallel;
+  if (p.batchReviewMode) aiBatchReviewMode.value = p.batchReviewMode;
+  if (p.batchScope) aiBatchScope.value = p.batchScope;
+  if (p.batchFilter) aiBatchFilter.value = p.batchFilter;
   updateAiRemoteWarning();
 }
 function aiResponseFormatInstructions() {
@@ -1603,13 +1614,14 @@ function aiResponseFormatInstructions() {
     return `IMPORTANT RESPONSE FORMAT:
 Return ONLY one JSON object. First character must be { and last must be }.
 Do not use markdown, code fences, comments, or explanation.
-Return a complete edited caption JSON object. Preserve unrelated content.`;
+Return a complete edited caption JSON object. Preserve unrelated content. If no changes are needed, return an empty response.`;
   }
   return `IMPORTANT RESPONSE FORMAT:
 Return ONLY one JSON object. First character must be { and last must be }.
 Do not use markdown, code fences, comments, or explanation.
 Prefer {"caption_edits":[...]} with only requested changes.
 Use update_element/add_element/remove_element/set_field. Do not include unchanged or unrelated elements.
+If no changes are needed, return {"caption_edits":[]} or an empty response.
 Full caption JSON is accepted only as a fallback.`;
 }
 function aiPromptForRequest() {
@@ -1954,6 +1966,203 @@ function applySelectedAiChanges() {
   if (!pendingAiCaption) return;
   applyAiCaption(pendingAiOps && pendingAiOps.length ? mergeSelectedAiOps(pendingAiBeforeCaption, pendingAiOps) : mergeSelectedAiCaption(pendingAiBeforeCaption, pendingAiCaption));
 }
+
+function aiBatchSetStatus(text, isError = false) {
+  aiBatchStatus.textContent = text;
+  aiBatchStatus.className = isError ? 'raw-status error' : 'raw-status';
+}
+function aiBatchCounts() {
+  const counts = { queued: aiBatch.queue.length, active: aiBatch.active, proposed: 0, nochange: 0, accepted: 0, rejected: 0, failed: 0 };
+  for (const r of aiBatch.results) counts[r.status] = (counts[r.status] || 0) + 1;
+  return counts;
+}
+function updateAiBatchControls() {
+  const c = aiBatchCounts();
+  aiBatchStart.disabled = aiBatch.running;
+  aiBatchPause.disabled = !aiBatch.running || aiBatch.paused;
+  aiBatchResume.disabled = !aiBatch.running || !aiBatch.paused;
+  aiBatchCancel.disabled = !aiBatch.running;
+  aiBatchAcceptAll.disabled = !c.proposed;
+  aiBatchRejectAll.disabled = !c.proposed;
+  aiBatchRetryFailed.disabled = aiBatch.running || !c.failed;
+  aiBatchClearSettled.disabled = !aiBatch.results.some((r) => ['accepted', 'rejected', 'nochange'].includes(r.status));
+  aiBatchClearAll.disabled = aiBatch.running || !aiBatch.results.length;
+}
+async function waitForActiveImage(rel, timeoutMs = 5000) {
+  const start = Date.now();
+  while (activeRel === rel && !imgLoaded && Date.now() - start < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+async function openAiBatchResult(r) {
+  if (!r) return;
+  await loadItem(r.rel);
+  if (r.before && r.after) {
+    pendingAiBeforeCaption = cloneJson(r.before);
+    pendingAiCaption = cloneJson(r.after);
+    pendingAiOps = r.ops || null;
+    aiRawResponse.value = r.raw || '';
+    aiRawWrap.classList.toggle('hidden', !r.raw);
+    aiDiff.textContent = r.summary || (pendingAiOps && pendingAiOps.length ? summarizeAiOps(pendingAiOps) : summarizeAiDiff(r.before, r.after));
+    aiDiff.classList.remove('hidden');
+    aiDiscardBtn.classList.remove('hidden');
+    aiApplyBtn.classList.toggle('hidden', r.status !== 'proposed');
+    aiStatus.textContent = `Reviewing batch result for ${r.rel} (${r.status}).`;
+    aiStatus.className = r.status === 'failed' ? 'raw-status error' : 'raw-status ok';
+    await waitForActiveImage(r.rel);
+    renderAiReview(pendingAiBeforeCaption, pendingAiCaption, pendingAiOps);
+  } else {
+    pendingAiBeforeCaption = null; pendingAiCaption = null; pendingAiOps = null;
+    aiApplyBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiReview.classList.add('hidden');
+    aiStatus.textContent = r.error || r.summary || `Opened ${r.rel}.`;
+    aiStatus.className = r.status === 'failed' ? 'raw-status error' : 'raw-status';
+  }
+}
+function renderAiBatchList() {
+  updateAiBatchControls();
+  const c = aiBatchCounts();
+  aiBatchSetStatus(`queued ${c.queued} · active ${c.active} · proposed ${c.proposed || 0} · accepted ${c.accepted || 0} · no change ${c.nochange || 0} · rejected ${c.rejected || 0} · failed ${c.failed || 0}${aiBatch.paused ? ' · paused' : ''}${aiBatch.cancelled ? ' · cancelling' : ''}`, !!c.failed);
+  aiBatchList.innerHTML = '';
+  const filter = aiBatchFilter.value || 'all';
+  const shown = aiBatch.results.filter((r) => filter === 'all' || r.status === filter).slice().reverse().slice(0, 200);
+  if (!shown.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = filter === 'all' ? 'No completed batch items yet.' : `No ${filter} batch items.`;
+    aiBatchList.appendChild(empty);
+    return;
+  }
+  for (const r of shown) {
+    const row = document.createElement('div');
+    row.className = 'ai-batch-item st-' + r.status;
+    const summary = r.summary || r.error || r.status;
+    row.innerHTML = `<div><strong>${escapeText(r.rel)}</strong> <span class="badge">${escapeText(r.status)}</span></div><div class="muted">${escapeText(summary)}</div>`;
+    const actions = document.createElement('div');
+    actions.className = 'ai-batch-actions';
+    const openBtn = document.createElement('button');
+    openBtn.className = 'mini'; openBtn.textContent = 'Open';
+    openBtn.addEventListener('click', () => openAiBatchResult(r));
+    actions.appendChild(openBtn);
+    if (r.status === 'proposed') {
+      const accept = document.createElement('button');
+      accept.className = 'mini primary'; accept.textContent = 'Accept';
+      accept.addEventListener('click', () => acceptAiBatchResult(r));
+      const reject = document.createElement('button');
+      reject.className = 'mini danger'; reject.textContent = 'Reject';
+      reject.addEventListener('click', () => { r.status = 'rejected'; renderAiBatchList(); });
+      actions.append(accept, reject);
+    }
+    row.appendChild(actions);
+    aiBatchList.appendChild(row);
+  }
+}
+function aiBatchItemsForScope() {
+  return aiBatchScope.value === 'visible' ? visibleItems() : datasetItems();
+}
+async function runAiEditForRel(rel, requestText) {
+  const itemData = await loadItemDataForRel(rel);
+  const parsed = C.parseCaptionDoc(itemData.caption || '', { repair: autoRepairJson.checked });
+  if (!parsed.doc) return { rel, status: 'failed', error: parsed.error || 'Caption is not structured JSON.' };
+  const before = cloneJson(parsed.doc);
+  const res = await fetch('/api/ai-edit-caption', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      image_path: rel, caption: before, user_request: requestText, coordinate_format: order(), coordinate_max: coordMax(),
+      selected_element_index: -1, validation_issues: C.validateDoc(before, coordMax()).map((x) => `${x.label}: ${x.msg}`),
+      settings: aiSettingsFromUi(), prompt_template: aiPromptForRequest()
+    })
+  });
+  const out = await res.json();
+  if (!out.ok) {
+    const details = out.validation && Array.isArray(out.validation.errors) && out.validation.errors.length ? ': ' + out.validation.errors.join('; ') : '';
+    return { rel, status: 'failed', error: (out.error || 'AI edit failed') + details, raw: out.raw_model_response || '', training: out.training_saved || null };
+  }
+  const after = out.caption;
+  const noChange = out.no_change || JSON.stringify(before) === JSON.stringify(after);
+  if (noChange) return { rel, status: 'nochange', before, after, summary: 'Model returned no changes.' + (out.training_saved ? (out.training_saved.error ? ' Training save failed.' : ' Training example saved.') : ''), raw: out.raw_model_response || '', training: out.training_saved || null };
+  const ops = out.debug && out.debug.response_mode === 'ops' ? parseAiOpsFromRaw(out.raw_model_response) : null;
+  return { rel, status: aiBatchReviewMode.value === 'auto' ? 'autosave' : 'proposed', before, after, ops, raw: out.raw_model_response || '', training: out.training_saved || null, summary: (ops && ops.length ? summarizeAiOps(ops) : summarizeAiDiff(before, after)) + (out.training_saved ? (out.training_saved.error ? '\nTraining save failed.' : '\nTraining example saved.') : '') };
+}
+async function acceptAiBatchResult(r) {
+  if (!r || !r.after || (r.status !== 'proposed' && r.status !== 'autosave')) return;
+  try {
+    await saveCaptionForRel(r.rel, C.serializeDoc(r.after, saveFormat.value !== 'minified'));
+    r.status = 'accepted';
+    r.summary = 'Saved AI edit. ' + (r.summary || '');
+    if (r.rel === activeRel) { dirty = false; await loadItem(activeRel); }
+  } catch (e) {
+    r.status = 'failed'; r.error = e.message || String(e);
+  }
+  renderAiBatchList();
+}
+async function aiBatchWorker(requestText) {
+  while (!aiBatch.cancelled) {
+    if (aiBatch.paused) { await new Promise((resolve) => setTimeout(resolve, 300)); continue; }
+    const item = aiBatch.queue.shift();
+    if (!item) break;
+    aiBatch.active++; renderAiBatchList();
+    try {
+      const result = await runAiEditForRel(item.rel, requestText);
+      aiBatch.results.push(result);
+      if (result.status === 'autosave') await acceptAiBatchResult(result);
+    } catch (e) {
+      aiBatch.results.push({ rel: item.rel, status: 'failed', error: e.message || String(e) });
+    } finally {
+      aiBatch.active--; aiBatch.done++; renderAiBatchList();
+    }
+  }
+}
+async function startAiBatchEdit() {
+  if (!aiEnabled.checked) { aiBatchSetStatus('AI Edit is disabled.', true); return; }
+  const requestText = aiEditRequest.value.trim();
+  if (!requestText) { aiBatchSetStatus('Enter an edit request before starting a batch.', true); return; }
+  if (dirty && !confirm('Current caption has unsaved changes. Continue without saving them first?')) return;
+  const list = await aiBatchItemsForScope();
+  if (!list.length) { aiBatchSetStatus('No dataset items to process.', true); return; }
+  const slots = Math.max(1, Math.min(16, Number(aiBatchParallel.value) || 1));
+  if (!confirm(`Run this AI edit over ${list.length} item(s) with ${slots} parallel slot(s)? Proposals and failures will be listed as they complete.`)) return;
+  updateAiRemoteWarning(); saveAiPrefs();
+  aiBatch = { running: true, paused: false, cancelled: false, queue: list.slice(), active: 0, done: 0, results: [], lastRequestText: requestText };
+  renderAiBatchList();
+  const workers = Array.from({ length: Math.min(slots, list.length) }, () => aiBatchWorker(requestText));
+  await Promise.allSettled(workers);
+  aiBatch.running = false; aiBatch.paused = false;
+  renderAiBatchList();
+  await refreshList(true);
+}
+async function acceptAllAiBatchProposals() {
+  const proposed = aiBatch.results.filter((r) => r.status === 'proposed');
+  for (const r of proposed) await acceptAiBatchResult(r);
+}
+function rejectAllAiBatchProposals() {
+  for (const r of aiBatch.results) if (r.status === 'proposed') r.status = 'rejected';
+  renderAiBatchList();
+}
+async function retryFailedAiBatchResults() {
+  if (aiBatch.running) return;
+  const failed = aiBatch.results.filter((r) => r.status === 'failed');
+  if (!failed.length) return;
+  const requestText = (aiBatch.lastRequestText || aiEditRequest.value || '').trim();
+  if (!requestText) { aiBatchSetStatus('No batch prompt is available for retry.', true); return; }
+  const slots = Math.max(1, Math.min(16, Number(aiBatchParallel.value) || 1));
+  aiBatch.results = aiBatch.results.filter((r) => r.status !== 'failed');
+  aiBatch.running = true; aiBatch.paused = false; aiBatch.cancelled = false; aiBatch.queue = failed.map((r) => ({ rel: r.rel })); aiBatch.active = 0; aiBatch.done = 0; aiBatch.lastRequestText = requestText;
+  renderAiBatchList();
+  const workers = Array.from({ length: Math.min(slots, aiBatch.queue.length) }, () => aiBatchWorker(requestText));
+  await Promise.allSettled(workers);
+  aiBatch.running = false; aiBatch.paused = false;
+  renderAiBatchList();
+  await refreshList(true);
+}
+function clearSettledAiBatchResults() {
+  aiBatch.results = aiBatch.results.filter((r) => !['accepted', 'rejected', 'nochange'].includes(r.status));
+  renderAiBatchList();
+}
+function clearAllAiBatchResults() {
+  if (aiBatch.running) return;
+  aiBatch.results = [];
+  renderAiBatchList();
+}
 async function askAiEdit() {
   if (!aiEnabled.checked) { aiStatus.textContent = 'AI Edit is disabled.'; aiStatus.className = 'raw-status error'; return; }
   if (!activeRel || !doc) { aiStatus.textContent = 'Open a structured caption first.'; aiStatus.className = 'raw-status error'; return; }
@@ -1983,7 +2192,8 @@ async function askAiEdit() {
     pendingAiBeforeCaption = before;
     pendingAiOps = out.debug && out.debug.response_mode === 'ops' ? parseAiOpsFromRaw(out.raw_model_response) : null;
     const modeLabel = out.debug && out.debug.response_mode ? ` (${out.debug.response_mode})` : '';
-    aiStatus.textContent = (out.validation && out.validation.valid ? 'Received valid AI-edited caption' : 'Received AI result') + modeLabel + '.';
+    const trainingLabel = out.training_saved ? (out.training_saved.error ? ' Training save failed.' : ' Training example saved.') : '';
+    aiStatus.textContent = (out.validation && out.validation.valid ? 'Received valid AI-edited caption' : 'Received AI result') + modeLabel + '.' + trainingLabel;
     aiStatus.className = 'raw-status ok';
     aiDiff.textContent = pendingAiOps && pendingAiOps.length ? summarizeAiOps(pendingAiOps) : summarizeAiDiff(before, pendingAiCaption);
     aiDiff.classList.remove('hidden');
@@ -2001,6 +2211,16 @@ async function askAiEdit() {
 aiAskBtn.addEventListener('click', askAiEdit);
 aiApplyBtn.addEventListener('click', () => { applySelectedAiChanges(); aiApplyBtn.classList.add('hidden'); });
 aiDiscardBtn.addEventListener('click', () => { pendingAiCaption = null; pendingAiBeforeCaption = null; pendingAiOps = null; aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiReview.classList.add('hidden'); aiStatus.textContent = 'AI result discarded.'; });
+aiBatchStart.addEventListener('click', () => startAiBatchEdit().catch((e) => aiBatchSetStatus(e.message || String(e), true)));
+aiBatchPause.addEventListener('click', () => { aiBatch.paused = true; renderAiBatchList(); });
+aiBatchResume.addEventListener('click', () => { aiBatch.paused = false; renderAiBatchList(); });
+aiBatchCancel.addEventListener('click', () => { aiBatch.cancelled = true; aiBatch.queue = []; renderAiBatchList(); });
+aiBatchAcceptAll.addEventListener('click', () => acceptAllAiBatchProposals().catch((e) => aiBatchSetStatus(e.message || String(e), true)));
+aiBatchRejectAll.addEventListener('click', rejectAllAiBatchProposals);
+aiBatchRetryFailed.addEventListener('click', () => retryFailedAiBatchResults().catch((e) => aiBatchSetStatus(e.message || String(e), true)));
+aiBatchClearSettled.addEventListener('click', clearSettledAiBatchResults);
+aiBatchClearAll.addEventListener('click', clearAllAiBatchResults);
+aiBatchFilter.addEventListener('change', () => { saveAiPrefs(); renderAiBatchList(); });
 aiSelectAllBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = true; });
 aiSelectNoneBtn.addEventListener('click', () => { for (const cb of aiChangeList.querySelectorAll('input[type=checkbox]')) cb.checked = false; });
 aiBeforeCanvas.addEventListener('click', openAiOverlayModal);
@@ -2019,7 +2239,7 @@ for (const modalCanvas of [aiOverlayBeforeCanvas, aiOverlayAfterCanvas]) {
 }
 aiResetPromptBtn.addEventListener('click', () => { aiPromptTemplate.value = DEFAULT_AI_PROMPT_TEMPLATE; saveAiPrefs(); });
 window.addEventListener('resize', () => { if (!aiOverlayModal.classList.contains('hidden')) drawAiOverlayModal(); });
-for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate]) {
+for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiSaveTraining, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate, aiBatchParallel, aiBatchReviewMode, aiBatchScope, aiBatchFilter]) {
   el.addEventListener('change', () => { updateAiRemoteWarning(); saveAiPrefs(); });
   el.addEventListener('input', debounce(() => { updateAiRemoteWarning(); saveAiPrefs(); }, 300));
 }

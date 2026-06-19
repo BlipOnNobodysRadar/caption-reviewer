@@ -171,6 +171,7 @@ def write_caption(image_path: Path, caption: str) -> Path:
 
 
 BACKUP_DIRNAME = ".caption_backups"
+AI_TRAINING_DIRNAME = ".caption_ai_training"
 REMOVED_DIRNAME = "removed"
 
 
@@ -188,6 +189,58 @@ def backup_original_caption(root: Path, caption_path: Path) -> Path | None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(caption_path.read_bytes())
     return dest
+
+
+def save_ai_training_example(
+    root: Path,
+    image_path: Path,
+    *,
+    prompt: str,
+    user_request: str,
+    before_caption: dict[str, Any],
+    after_caption: dict[str, Any],
+    raw_model_response: str,
+    response_mode: str,
+    validation: dict[str, Any],
+    settings: dict[str, Any],
+    overlay_bytes: bytes | None,
+    send_original: bool,
+    send_overlay: bool,
+) -> dict[str, str]:
+    """Persist a successful AI edit example for future fine-tuning.
+
+    The dataset captions are not modified here; examples live under a hidden
+    sidecar directory so enabling capture is non-breaking for existing data.
+    """
+    rel = image_path.relative_to(root)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    digest = hashlib.sha1(f"{rel.as_posix()}\n{time.time()}".encode("utf-8")).hexdigest()[:10]
+    safe_stem = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in image_path.stem)[:80] or "item"
+    out_dir = root / AI_TRAINING_DIRNAME / f"{stamp}_{safe_stem}_{digest}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    files: dict[str, str] = {}
+    if send_original:
+        original_name = "original" + image_path.suffix.lower()
+        shutil.copy2(image_path, out_dir / original_name)
+        files["original_image"] = original_name
+    if send_overlay and overlay_bytes:
+        (out_dir / "overlay.png").write_bytes(overlay_bytes)
+        files["overlay_image"] = "overlay.png"
+    example = {
+        "rel": rel.as_posix(),
+        "created_at": now_ts(),
+        "user_request": user_request,
+        "prompt": prompt,
+        "before_caption": before_caption,
+        "after_caption": after_caption,
+        "raw_model_response": raw_model_response,
+        "response_mode": response_mode,
+        "validation": validation,
+        "settings": {k: v for k, v in settings.items() if k not in {"base_url"}},
+        "files": files,
+    }
+    (out_dir / "example.json").write_text(json.dumps(example, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"dir": str(out_dir), **files}
 
 
 AI_EDIT_SCHEMA_INSTRUCTIONS = """Ideogram4 caption essentials:
@@ -469,6 +522,10 @@ def apply_ai_edit_ops(current_caption: dict[str, Any], ops: list[dict[str, Any]]
 
 
 def parse_ai_caption_response(text: str, current_caption: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str | None, str]:
+    if not str(text or "").strip():
+        if isinstance(current_caption, dict):
+            return json.loads(json.dumps(current_caption)), None, "no_change"
+        return None, "Model returned an empty response and no current caption was available.", "no_change"
     obj, parse_error = parse_ai_json_response(text)
     if parse_error:
         return None, parse_error, "invalid"
@@ -478,6 +535,8 @@ def parse_ai_caption_response(text: str, current_caption: dict[str, Any] | None 
         return obj, None, "full_caption"
     ops, ops_error = normalize_ai_edit_ops(obj)
     if ops is not None:
+        if not ops and isinstance(current_caption, dict):
+            return json.loads(json.dumps(current_caption)), None, "no_change"
         if not isinstance(current_caption, dict):
             return None, "Model returned edit operations, but the current caption was unavailable.", "ops"
         edited, errors = apply_ai_edit_ops(current_caption, ops)
@@ -675,6 +734,7 @@ def scan_images(root: Path, recursive: bool) -> list[Path]:
             p.is_file()
             and allowed_image(p)
             and BACKUP_DIRNAME not in p.parts
+            and AI_TRAINING_DIRNAME not in p.parts
             and REMOVED_DIRNAME not in p.relative_to(root).parts
         )
     ]
@@ -862,6 +922,7 @@ def ai_edit_caption():
     include_pretty_json = ai_bool(settings, "include_pretty_json", True)
     include_prompt_template = ai_bool(settings, "include_prompt_template", True)
     overlay_max_size = ai_int(settings, "overlay_max_size", 1400, 256, 4096)
+    save_training_data = ai_bool(settings, "save_training_data", False)
 
     coordinate_format = str(data.get("coordinate_format") or "yxyx")
     if coordinate_format not in ("yxyx", "xyxy"):
@@ -890,13 +951,14 @@ def ai_edit_caption():
 
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     overlay_generated = False
+    overlay_bytes: bytes | None = None
     try:
         if send_original:
             content.append({"type": "image_url", "image_url": {"url": image_data_url(image_path, overlay_max_size)}})
         if send_overlay:
-            overlay = render_caption_overlay(image_path, caption, coordinate_format, coordinate_max, overlay_max_size)
+            overlay_bytes = render_caption_overlay(image_path, caption, coordinate_format, coordinate_max, overlay_max_size)
             overlay_generated = True
-            content.append({"type": "image_url", "image_url": {"url": overlay_data_url(overlay)}})
+            content.append({"type": "image_url", "image_url": {"url": overlay_data_url(overlay_bytes)}})
     except Exception as exc:
         return jsonify({"ok": False, "error": f"Overlay/image preparation failed: {exc}", "validation": {"valid": False, "errors": [str(exc)]}}), 500
 
@@ -939,7 +1001,17 @@ def ai_edit_caption():
             }
     if not validation["valid"]:
         return jsonify({"ok": False, "error": "Model returned invalid caption.", "raw_model_response": raw_model_response, "validation": validation, "debug": {"llamacpp_url": url, "overlay_generated": overlay_generated, "response_mode": response_mode}}), 422
-    return jsonify({"ok": True, "caption": edited, "raw_model_response": raw_model_response, "validation": validation, "debug": {"overlay_generated": overlay_generated, "llamacpp_url": url, "response_mode": response_mode}})
+    training_saved = None
+    if save_training_data:
+        try:
+            training_saved = save_ai_training_example(
+                root, image_path, prompt=prompt, user_request=user_request, before_caption=caption, after_caption=edited,
+                raw_model_response=raw_model_response, response_mode=response_mode, validation=validation, settings=settings,
+                overlay_bytes=overlay_bytes, send_original=send_original, send_overlay=send_overlay,
+            )
+        except Exception as exc:
+            training_saved = {"error": str(exc)}
+    return jsonify({"ok": True, "caption": edited, "no_change": response_mode == "no_change" or edited == caption, "raw_model_response": raw_model_response, "validation": validation, "training_saved": training_saved, "debug": {"overlay_generated": overlay_generated, "llamacpp_url": url, "response_mode": response_mode}})
 
 @app.route("/api/status", methods=["POST"])
 def set_status():
