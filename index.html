@@ -25,6 +25,7 @@
       </div>
     </header>
 
+
     <!-- ================= slim canvas tool strip ================= -->
     <section class="toolstrip">
       <div class="tool-group">
@@ -75,6 +76,39 @@
           <div class="col-head">
             <span class="side-tag tag-a">A</span>
             <span class="col-name">editing</span>
+              <!-- Optional rating goal tracker -->
+              <section id="goalTracker" class="goal-tracker goal-collapsed" aria-label="Rating goal tracker">
+                <div class="goal-card">
+                  <div class="goal-main">
+                    <button id="goalCollapse" class="goal-icon" title="Collapse or expand rating goal tracker" aria-label="Collapse or expand rating goal tracker">▾</button>
+                    <div class="goal-title">
+                      <span class="goal-kicker">Rating goal</span>
+                      <strong id="goalHeadline">Set a focus goal</strong>
+                    </div>
+                    <div id="goalStats" class="goal-stats muted">Track active review time and ETA.</div>
+                  </div>
+                  <div id="goalExpanded" class="goal-expanded">
+                    <div id="goalSetup" class="goal-setup">
+                      <label>Complete
+                        <input id="goalTarget" type="number" min="1" step="1" value="25" inputmode="numeric">
+                        ratings
+                      </label>
+                      <button id="goalStart" class="primary mini">Start</button>
+                    </div>
+                    <div id="goalActive" class="goal-active hidden">
+                      <div class="goal-progress-row">
+                        <div class="goal-progress" aria-label="Goal progress"><div id="goalProgressFill"></div></div>
+                        <span id="goalProgressText">0 / 0</span>
+                      </div>
+                      <div class="goal-actions">
+                        <button id="goalPause" class="mini">Pause</button>
+                        <button id="goalReset" class="mini" title="Reset completed count and timer">Reset</button>
+                        <button id="goalCancel" class="mini danger" title="Cancel this goal">Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
           </div>
           <div class="image-wrap" id="imageWrap">
             <canvas id="imageCanvas"></canvas>
