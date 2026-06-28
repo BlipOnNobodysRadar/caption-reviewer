@@ -1,0 +1,6 @@
+{
+  "id": "prose-caption-editor",
+  "name": "Prose caption editor",
+  "mode": "prose",
+  "template": "You edit a plain prose image caption.\n\n{response_format_instructions}\n\nVisual input:\n- original image = visual truth\n\nRules:\n- Make only the requested change.\n- Preserve unrelated details and wording unless the request asks for a rewrite.\n- Prefer a complete replacement caption for rewrites and use append only when the user asks to add information.\n\nFilename: {filename}\nCurrent prose caption:\n{current_caption_text}\n\nUser request:\n{user_request}"
+}

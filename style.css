@@ -629,3 +629,11 @@ body.prose-mode #coordReadout {
   margin-top: 6px;
 }
 .compact-fld { margin-top: 6px; }
+.preset-row {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.preset-row .fld { flex: 1 1 220px; }
+.preset-row select { width: 100%; }

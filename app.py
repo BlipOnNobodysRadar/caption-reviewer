@@ -838,6 +838,93 @@ def build_counts(root: Path, recursive: bool) -> dict[str, int]:
     return counts
 
 
+USER_CONFIG_DIRNAME = ".caption_reviewer_user"
+PROMPT_TEMPLATE_DIRNAME = "prompt_templates"
+AI_SETTINGS_DIRNAME = "ai_settings_presets"
+REPO_PROMPT_TEMPLATE_DIR = Path(__file__).resolve().parent / "prompt_templates"
+REPO_AI_SETTINGS_DIR = Path(__file__).resolve().parent / "ai_settings_presets"
+
+
+def user_config_root() -> Path:
+    root = Path(os.environ.get("CAPTION_REVIEWER_USER_CONFIG_DIR", Path(__file__).resolve().parent / USER_CONFIG_DIRNAME)).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def slugify_user_name(name: str) -> str:
+    slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in name.strip())
+    slug = "-".join(part for part in slug.split("-") if part)
+    return (slug or "preset")[:80]
+
+
+def read_json_files(directory: Path, source: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if not directory.exists():
+        return out
+    for path in sorted(directory.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        data.setdefault("id", path.stem)
+        data.setdefault("name", path.stem.replace("-", " ").title())
+        data["source"] = source
+        out.append(data)
+    return out
+
+
+def write_user_json(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise RuntimeError("Name is required.")
+    subdir = PROMPT_TEMPLATE_DIRNAME if kind == "prompt" else AI_SETTINGS_DIRNAME
+    out_dir = user_config_root() / subdir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    item = dict(payload)
+    item["id"] = slugify_user_name(name)
+    item["name"] = name
+    item["source"] = "user"
+    path = out_dir / f"{item['id']}.json"
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(item, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+    return item
+
+
+@app.route("/api/ai-prompt-templates", methods=["GET", "POST"])
+def ai_prompt_templates():
+    if request.method == "GET":
+        user_dir = user_config_root() / PROMPT_TEMPLATE_DIRNAME
+        return jsonify({"ok": True, "repo": read_json_files(REPO_PROMPT_TEMPLATE_DIR, "repo"), "user": read_json_files(user_dir, "user")})
+    data = request.get_json(force=True)
+    template = str(data.get("template") or "")
+    if not template.strip():
+        return jsonify({"error": "Template text is required."}), 400
+    mode = str(data.get("mode") or "ideogram4")
+    if mode not in ("ideogram4", "prose"):
+        mode = "ideogram4"
+    try:
+        item = write_user_json("prompt", {"name": data.get("name"), "mode": mode, "template": template})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "template": item})
+
+
+@app.route("/api/ai-settings-presets", methods=["GET", "POST"])
+def ai_settings_presets():
+    if request.method == "GET":
+        user_dir = user_config_root() / AI_SETTINGS_DIRNAME
+        return jsonify({"ok": True, "repo": read_json_files(REPO_AI_SETTINGS_DIR, "repo"), "user": read_json_files(user_dir, "user")})
+    data = request.get_json(force=True)
+    settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+    try:
+        item = write_user_json("settings", {"name": data.get("name"), "settings": settings})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "preset": item})
+
 @app.route("/")
 def index():
     return render_template("index.html", app_title=APP_TITLE)

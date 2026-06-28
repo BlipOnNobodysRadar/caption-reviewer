@@ -326,6 +326,12 @@
           <details class="setup">
             <summary>AI settings</summary>
             <div class="setup-body compact">
+              <div class="preset-row">
+                <label class="fld">Settings preset
+                  <select id="aiSettingsPresetSelect"></select>
+                </label>
+                <button id="aiSaveSettingsPreset" class="mini">Save current as preset</button>
+              </div>
               <label class="inline"><input type="checkbox" id="aiEnabled" checked> enabled</label>
               <label class="fld">Base URL <input id="aiBaseUrl" value="http://localhost:8080" spellcheck="false"></label>
               <label class="fld">Endpoint path <input id="aiEndpointPath" value="/v1/chat/completions" spellcheck="false"></label>
@@ -354,8 +360,14 @@
           <details class="setup">
             <summary>Prompt template</summary>
             <div class="setup-body">
+              <div class="preset-row">
+                <label class="fld">Prompt template
+                  <select id="aiPromptTemplateSelect"></select>
+                </label>
+                <button id="aiSavePromptTemplate" class="mini">Save current as template</button>
+              </div>
               <textarea id="aiPromptTemplate" rows="15" spellcheck="false"></textarea>
-              <button id="aiResetPromptBtn" class="mini">Reset prompt template</button>
+              <button id="aiResetPromptBtn" class="mini">Reset selected template</button>
             </div>
           </details>
           <details id="aiRawWrap" class="setup hidden">

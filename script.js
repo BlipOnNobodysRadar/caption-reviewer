@@ -1774,6 +1774,8 @@ const aiMaxTokens = $('aiMaxTokens'), aiTemperature = $('aiTemperature'), aiTime
 const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiSaveTraining = $('aiSaveTraining'), aiOverlayMax = $('aiOverlayMax');
 const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiIncludePrettyJson'), aiIncludePromptTemplate = $('aiIncludePromptTemplate');
 const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn'), aiModeHint = $('aiModeHint');
+const aiPromptTemplateSelect = $('aiPromptTemplateSelect'), aiSavePromptTemplateBtn = $('aiSavePromptTemplate');
+const aiSettingsPresetSelect = $('aiSettingsPresetSelect'), aiSaveSettingsPresetBtn = $('aiSaveSettingsPreset');
 const aiBatchParallel = $('aiBatchParallel'), aiBatchReviewMode = $('aiBatchReviewMode'), aiBatchScope = $('aiBatchScope');
 const aiBatchStart = $('aiBatchStart'), aiBatchPause = $('aiBatchPause'), aiBatchResume = $('aiBatchResume'), aiBatchCancel = $('aiBatchCancel');
 const aiBatchAcceptAll = $('aiBatchAcceptAll'), aiBatchRejectAll = $('aiBatchRejectAll'), aiBatchRetryFailed = $('aiBatchRetryFailed');
@@ -1783,6 +1785,56 @@ let pendingAiBeforeCaption = null;
 let pendingAiOps = null;
 let aiOverlayState = { before: null, after: null, scale: 1, ox: 0, oy: 0, drag: null };
 let aiBatch = { running: false, paused: false, cancelled: false, queue: [], active: 0, done: 0, results: [], lastRequestText: '' };
+let aiPromptTemplates = { repo: [], user: [] };
+let aiSettingsPresets = { repo: [], user: [] };
+
+function defaultPromptTemplateForMode(mode = (isProseMode() ? 'prose' : 'ideogram4')) {
+  return mode === 'prose' ? DEFAULT_PROSE_AI_PROMPT_TEMPLATE : DEFAULT_AI_PROMPT_TEMPLATE;
+}
+function currentPromptMode() { return isProseMode() ? 'prose' : 'ideogram4'; }
+function allPromptTemplates() { return [...(aiPromptTemplates.repo || []), ...(aiPromptTemplates.user || [])]; }
+function allSettingsPresets() { return [...(aiSettingsPresets.repo || []), ...(aiSettingsPresets.user || [])]; }
+function selectedPromptTemplate() {
+  const [source, id] = String(aiPromptTemplateSelect.value || '').split(':');
+  return allPromptTemplates().find((t) => t.source === source && t.id === id) || null;
+}
+function populateGroupedSelect(select, repoItems, userItems, placeholder) {
+  select.innerHTML = '';
+  const ph = document.createElement('option'); ph.value = ''; ph.textContent = placeholder; select.appendChild(ph);
+  const addGroup = (label, items) => {
+    const group = document.createElement('optgroup'); group.label = label;
+    for (const item of items || []) {
+      const opt = document.createElement('option');
+      opt.value = `${item.source}:${item.id}`; opt.textContent = item.name || item.id;
+      group.appendChild(opt);
+    }
+    select.appendChild(group);
+  };
+  addGroup('Repo templates', repoItems);
+  addGroup('User templates', userItems);
+}
+async function loadAiPresetCatalogs() {
+  try {
+    const [templatesRes, settingsRes] = await Promise.all([fetch('/api/ai-prompt-templates'), fetch('/api/ai-settings-presets')]);
+    const templates = await templatesRes.json();
+    const settings = await settingsRes.json();
+    if (templates.ok) aiPromptTemplates = { repo: templates.repo || [], user: templates.user || [] };
+    if (settings.ok) aiSettingsPresets = { repo: settings.repo || [], user: settings.user || [] };
+  } catch (e) { /* keep built-in fallback constants */ }
+  renderAiPresetSelects();
+}
+function renderAiPresetSelects() {
+  const mode = currentPromptMode();
+  const repoTemplates = (aiPromptTemplates.repo || []).filter((t) => !t.mode || t.mode === mode);
+  const userTemplates = (aiPromptTemplates.user || []).filter((t) => !t.mode || t.mode === mode);
+  populateGroupedSelect(aiPromptTemplateSelect, repoTemplates, userTemplates, 'Choose a template…');
+  populateGroupedSelect(aiSettingsPresetSelect, aiSettingsPresets.repo || [], aiSettingsPresets.user || [], 'Choose a preset…');
+}
+function setPromptTemplateForMode(mode = currentPromptMode()) {
+  const ai = (lastPrefs && lastPrefs.ai) || {};
+  const saved = ai.promptTemplatesByMode && ai.promptTemplatesByMode[mode];
+  aiPromptTemplate.value = saved || (mode === 'ideogram4' ? ai.promptTemplate : '') || defaultPromptTemplateForMode(mode);
+}
 
 function aiSettingsFromUi() {
   return {
@@ -1808,21 +1860,56 @@ function isLocalAiUrl() {
   } catch (e) { return false; }
 }
 function updateAiRemoteWarning() { aiRemoteWarning.classList.toggle('hidden', isLocalAiUrl()); }
+function aiPrefsFromUi() {
+  return {
+    enabled: aiEnabled.checked, baseUrl: aiBaseUrl.value, endpointPath: aiEndpointPath.value, model: aiModel.value,
+    maxTokens: aiMaxTokens.value, temperature: aiTemperature.value, timeout: aiTimeout.value,
+    sendOriginal: aiSendOriginal.checked, sendOverlay: aiSendOverlay.checked, autoApply: aiAutoApply.checked, saveTraining: aiSaveTraining.checked,
+    overlayMax: aiOverlayMax.value, includeRawJson: aiIncludeRawJson.checked, includePrettyJson: aiIncludePrettyJson.checked,
+    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, batchParallel: aiBatchParallel.value,
+    batchReviewMode: aiBatchReviewMode.value, batchScope: aiBatchScope.value, batchFilter: aiBatchFilter.value
+  };
+}
+function applyAiSettingsPreset(p) {
+  if (typeof p.enabled === 'boolean') aiEnabled.checked = p.enabled;
+  if (p.baseUrl != null) aiBaseUrl.value = p.baseUrl;
+  if (p.endpointPath != null) aiEndpointPath.value = p.endpointPath;
+  if (p.model != null) aiModel.value = p.model;
+  if (p.responseMode != null) aiResponseMode.value = p.responseMode;
+  if (p.maxTokens != null) aiMaxTokens.value = p.maxTokens;
+  if (p.temperature != null) aiTemperature.value = p.temperature;
+  if (p.timeout != null) aiTimeout.value = p.timeout;
+  if (typeof p.sendOriginal === 'boolean') aiSendOriginal.checked = p.sendOriginal;
+  if (typeof p.sendOverlay === 'boolean') aiSendOverlay.checked = p.sendOverlay;
+  if (typeof p.autoApply === 'boolean') aiAutoApply.checked = p.autoApply;
+  if (typeof p.saveTraining === 'boolean') aiSaveTraining.checked = p.saveTraining;
+  if (p.overlayMax != null) aiOverlayMax.value = p.overlayMax;
+  if (typeof p.includeRawJson === 'boolean') aiIncludeRawJson.checked = p.includeRawJson;
+  if (typeof p.includePrettyJson === 'boolean') aiIncludePrettyJson.checked = p.includePrettyJson;
+  if (typeof p.includePromptTemplate === 'boolean') aiIncludePromptTemplate.checked = p.includePromptTemplate;
+  if (p.batchParallel != null) aiBatchParallel.value = p.batchParallel;
+  if (p.batchReviewMode != null) aiBatchReviewMode.value = p.batchReviewMode;
+  if (p.batchScope != null) aiBatchScope.value = p.batchScope;
+  if (p.batchFilter != null) aiBatchFilter.value = p.batchFilter;
+}
 function saveAiPrefs() {
   const p = lastPrefs || {};
+  const prevAi = p.ai || {};
+  const promptTemplatesByMode = Object.assign({}, prevAi.promptTemplatesByMode || {});
+  promptTemplatesByMode[currentPromptMode()] = aiPromptTemplate.value;
   p.ai = {
     enabled: aiEnabled.checked, baseUrl: aiBaseUrl.value, endpointPath: aiEndpointPath.value, model: aiModel.value,
     maxTokens: aiMaxTokens.value, temperature: aiTemperature.value, timeout: aiTimeout.value,
     sendOriginal: aiSendOriginal.checked, sendOverlay: aiSendOverlay.checked, autoApply: aiAutoApply.checked, saveTraining: aiSaveTraining.checked,
     overlayMax: aiOverlayMax.value, includeRawJson: aiIncludeRawJson.checked, includePrettyJson: aiIncludePrettyJson.checked,
-    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value, batchParallel: aiBatchParallel.value, batchReviewMode: aiBatchReviewMode.value, batchScope: aiBatchScope.value, batchFilter: aiBatchFilter.value
+    includePromptTemplate: aiIncludePromptTemplate.checked, responseMode: aiResponseMode.value, promptTemplate: aiPromptTemplate.value, promptTemplatesByMode, batchParallel: aiBatchParallel.value, batchReviewMode: aiBatchReviewMode.value, batchScope: aiBatchScope.value, batchFilter: aiBatchFilter.value
   };
   lastPrefs = p;
   writePrefs();
 }
 function initAiPrefs() {
   const p = (lastPrefs && lastPrefs.ai) || {};
-  aiPromptTemplate.value = p.promptTemplate || DEFAULT_AI_PROMPT_TEMPLATE;
+  setPromptTemplateForMode(currentPromptMode());
   if (typeof p.enabled === 'boolean') aiEnabled.checked = p.enabled;
   if (p.baseUrl) aiBaseUrl.value = p.baseUrl;
   if (p.endpointPath) aiEndpointPath.value = p.endpointPath;
@@ -1844,6 +1931,7 @@ function initAiPrefs() {
   if (p.batchScope) aiBatchScope.value = p.batchScope;
   if (p.batchFilter) aiBatchFilter.value = p.batchFilter;
   updateAiRemoteWarning();
+  loadAiPresetCatalogs();
 }
 function aiResponseFormatInstructions() {
   if (isProseMode()) {
@@ -1867,7 +1955,7 @@ If no changes are needed, return {"caption_edits":[]} or an empty response.
 Full caption JSON is accepted only as a fallback.`;
 }
 function aiPromptForRequest() {
-  const base = isProseMode() ? DEFAULT_PROSE_AI_PROMPT_TEMPLATE : (aiPromptTemplate.value || DEFAULT_AI_PROMPT_TEMPLATE);
+  const base = aiPromptTemplate.value || defaultPromptTemplateForMode();
   const instructions = aiResponseFormatInstructions();
   return base.includes('{response_format_instructions}')
     ? base.replaceAll('{response_format_instructions}', instructions)
@@ -2496,7 +2584,45 @@ for (const modalCanvas of [aiOverlayBeforeCanvas, aiOverlayAfterCanvas]) {
   modalCanvas.addEventListener('pointerup', () => { aiOverlayState.drag = null; aiOverlayBeforeCanvas.classList.remove('dragging'); aiOverlayAfterCanvas.classList.remove('dragging'); });
   modalCanvas.addEventListener('pointercancel', () => { aiOverlayState.drag = null; aiOverlayBeforeCanvas.classList.remove('dragging'); aiOverlayAfterCanvas.classList.remove('dragging'); });
 }
-aiResetPromptBtn.addEventListener('click', () => { aiPromptTemplate.value = DEFAULT_AI_PROMPT_TEMPLATE; saveAiPrefs(); });
+aiResetPromptBtn.addEventListener('click', () => {
+  const selected = selectedPromptTemplate();
+  aiPromptTemplate.value = (selected && selected.template) || defaultPromptTemplateForMode();
+  saveAiPrefs();
+});
+aiPromptTemplateSelect.addEventListener('change', () => {
+  const selected = selectedPromptTemplate();
+  if (!selected) return;
+  aiPromptTemplate.value = selected.template || defaultPromptTemplateForMode(selected.mode);
+  saveAiPrefs();
+});
+aiSavePromptTemplateBtn.addEventListener('click', async () => {
+  const name = prompt('Name this prompt template:');
+  if (!name) return;
+  const res = await fetch('/api/ai-prompt-templates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, mode: currentPromptMode(), template: aiPromptTemplate.value }) });
+  const out = await res.json();
+  if (out.error) { aiStatus.textContent = out.error; aiStatus.className = 'raw-status error'; return; }
+  await loadAiPresetCatalogs();
+  aiPromptTemplateSelect.value = `user:${out.template.id}`;
+  aiStatus.textContent = 'Saved prompt template.'; aiStatus.className = 'raw-status ok';
+});
+aiSettingsPresetSelect.addEventListener('change', () => {
+  const [source, id] = String(aiSettingsPresetSelect.value || '').split(':');
+  const selected = allSettingsPresets().find((preset) => preset.source === source && preset.id === id);
+  if (!selected || !selected.settings) return;
+  applyAiSettingsPreset(selected.settings);
+  saveAiPrefs();
+  updateAiRemoteWarning();
+});
+aiSaveSettingsPresetBtn.addEventListener('click', async () => {
+  const name = prompt('Name this AI settings preset:');
+  if (!name) return;
+  const res = await fetch('/api/ai-settings-presets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, settings: aiPrefsFromUi() }) });
+  const out = await res.json();
+  if (out.error) { aiStatus.textContent = out.error; aiStatus.className = 'raw-status error'; return; }
+  await loadAiPresetCatalogs();
+  aiSettingsPresetSelect.value = `user:${out.preset.id}`;
+  aiStatus.textContent = 'Saved AI settings preset.'; aiStatus.className = 'raw-status ok';
+});
 window.addEventListener('resize', () => { if (!aiOverlayModal.classList.contains('hidden')) drawAiOverlayModal(); });
 for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode, aiMaxTokens, aiTemperature, aiTimeout, aiSendOriginal, aiSendOverlay, aiAutoApply, aiSaveTraining, aiOverlayMax, aiIncludeRawJson, aiIncludePrettyJson, aiIncludePromptTemplate, aiPromptTemplate, aiBatchParallel, aiBatchReviewMode, aiBatchScope, aiBatchFilter]) {
   el.addEventListener('change', () => { updateAiRemoteWarning(); saveAiPrefs(); });
@@ -2649,6 +2775,8 @@ captionMode.addEventListener('change', () => {
   }
   const text = activeTab === 'raw' ? captionText.value : currentCaptionText();
   setCaptionState(text);
+  renderAiPresetSelects();
+  setPromptTemplateForMode();
   dirty = !!activeRel; updateDirtyUi();
   if (dirty) setMessage('Caption mode changed; save to keep this text.');
   savePrefs();
