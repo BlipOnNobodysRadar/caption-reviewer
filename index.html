@@ -156,6 +156,12 @@
           <label class="inline" title="First save of each caption stores the untouched original under .caption_backups/">
             <input type="checkbox" id="backupOriginals" checked> backup originals
           </label>
+          <label class="fld compact-fld">Caption mode
+            <select id="captionMode" title="Ideogram4 uses structured JSON with boxes; Prose uses plain text captions.">
+              <option value="ideogram4" selected>Ideogram4 JSON + boxes</option>
+              <option value="prose">Prose / plain text</option>
+            </select>
+          </label>
           <div class="setup-row">
             <button id="pickFolder" title="Choose a dataset folder with an OS directory picker">Pick folder…</button>
             <button id="openFolder" class="primary" title="Load this folder for review">Open folder</button>
@@ -243,7 +249,7 @@
         <summary>Experimental AI Edit</summary>
         <div class="ai-edit-body">
           <p class="muted">Ask a running local llama.cpp-compatible loaded local vision model to edit the current caption. Images are sent only to the configured backend URL.</p>
-          <p class="ai-mode-hint">Targeted edit operations are enabled by default, so the model can return only bbox/element changes instead of a full recaption.</p>
+          <p class="ai-mode-hint" id="aiModeHint">Targeted edit operations are enabled by default, so the model can return only bbox/element changes instead of a full recaption.</p>
           <label class="fld">Edit request
             <textarea id="aiEditRequest" rows="3" placeholder="Add bboxes for Ashe's hood and hands." spellcheck="false"></textarea>
           </label>
@@ -365,6 +371,17 @@
       </div>
 
       <div id="fieldsPanel" class="fields-panel">
+        <div id="prosePanel" class="prose-panel hidden">
+          <label class="fld">Caption
+            <textarea id="proseCaptionText" rows="14" placeholder="Write or review a natural-language caption for this image." spellcheck="true"></textarea>
+          </label>
+          <div class="prose-quick-actions">
+            <button id="proseAppendBlank" class="mini" title="Append a blank line for an additional caption note">Append paragraph</button>
+            <span id="proseStats" class="muted"></span>
+          </div>
+        </div>
+
+        <div id="structuredPanel">
         <div id="fieldsNotice" class="notice hidden">
           <span id="fieldsNoticeText"></span>
           <button id="convertBtn" class="hidden">Convert to structured caption</button>
@@ -409,6 +426,7 @@
           <span class="muted hint">click a card or box to select; A autofills, P adds picked colors</span>
         </div>
         <div id="elementsList" class="elements-list"></div>
+        </div>
       </div>
 
       <div id="rawPanel" class="raw-panel hidden">

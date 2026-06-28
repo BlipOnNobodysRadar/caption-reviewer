@@ -7,7 +7,7 @@ const C = window.BBoxCore;
 /* ---------------- DOM ---------------- */
 const $ = (id) => document.getElementById(id);
 const targetFolder = $('targetFolder'), recursive = $('recursive'), openFolderBtn = $('openFolder'), pickFolderBtn = $('pickFolder');
-const backupOriginals = $('backupOriginals');
+const backupOriginals = $('backupOriginals'), captionMode = $('captionMode');
 const statusFilter = $('statusFilter'), sortBy = $('sortBy'), searchBox = $('searchBox'), countsEl = $('counts');
 const listEl = $('itemList'), listCountEl = $('listCount');
 const emptyState = $('emptyState'), reviewView = $('reviewView');
@@ -23,6 +23,7 @@ const ctx = imageCanvas.getContext('2d');
 const ratingButtons = $('ratingButtons'), clearStatusBtn = $('clearStatus');
 const tabFieldsBtn = $('tabFieldsBtn'), tabRawBtn = $('tabRawBtn');
 const fieldsPanel = $('fieldsPanel'), rawPanel = $('rawPanel');
+const prosePanel = $('prosePanel'), structuredPanel = $('structuredPanel'), proseCaptionText = $('proseCaptionText'), proseAppendBlank = $('proseAppendBlank'), proseStats = $('proseStats');
 const fieldsNotice = $('fieldsNotice'), fieldsNoticeText = $('fieldsNoticeText'), convertBtn = $('convertBtn');
 const fldHld = $('fld_hld'), fldAesthetics = $('fld_aesthetics'), fldLighting = $('fld_lighting');
 const fldArt = $('fld_art'), fldMedium = $('fld_medium'), fldStylePalette = $('fld_stylePalette');
@@ -124,6 +125,7 @@ function loadPrefs() {
   if (p.order) bboxFormat.value = p.order;
   if (p.coordMax) bboxCoordMax.value = p.coordMax;
   if (p.saveFormat) saveFormat.value = p.saveFormat;
+  if (p.captionMode) captionMode.value = p.captionMode;
   if (typeof p.backup === 'boolean') backupOriginals.checked = p.backup;
   if (typeof p.focus === 'boolean') focusMode.checked = p.focus;
   if (typeof p.showBboxes === 'boolean') showBboxes.checked = p.showBboxes;
@@ -143,7 +145,7 @@ function loadPrefs() {
 function writePrefs() {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify({
-      order: bboxFormat.value, coordMax: bboxCoordMax.value, saveFormat: saveFormat.value,
+      order: bboxFormat.value, coordMax: bboxCoordMax.value, saveFormat: saveFormat.value, captionMode: captionMode.value,
       backup: backupOriginals.checked, focus: focusMode.checked,
       showBboxes: showBboxes.checked, bboxLabels: bboxLabels.checked, bboxFill: bboxFill.checked,
       advanceOnRate: advanceOnRate.checked,
@@ -642,16 +644,65 @@ async function loadItem(rel) {
   if (compareActive) loadCompareItem(rel);
 }
 
+function isProseMode() { return captionMode && captionMode.value === 'prose'; }
+function currentCaptionText() { return isProseMode() ? proseCaptionText.value : captionText.value; }
+function updateProseStats() {
+  if (!proseStats) return;
+  const text = proseCaptionText.value || '';
+  const words = (text.trim().match(/\S+/g) || []).length;
+  proseStats.textContent = `${words} word${words === 1 ? '' : 's'} · ${text.length} character${text.length === 1 ? '' : 's'}`;
+}
+function updateCaptionModeUi() {
+  const prose = isProseMode();
+  document.body.classList.toggle('prose-mode', prose);
+  structuredPanel.classList.toggle('hidden', prose);
+  prosePanel.classList.toggle('hidden', !prose);
+  tabFieldsBtn.textContent = prose ? 'Prose' : 'Fields';
+  tabFieldsBtn.title = prose ? 'Edit the plain-text prose caption' : 'Edit caption in friendly fields';
+  tabRawBtn.textContent = prose ? 'Text file' : 'Raw JSON';
+  tabRawBtn.title = prose ? 'Edit the caption text file directly' : 'Edit the caption JSON directly';
+  rawApplyBtn.classList.toggle('hidden', prose);
+  repairJsonBtn.classList.toggle('hidden', prose);
+  saveFormat.disabled = prose;
+  autoRepairJson.disabled = prose;
+  addElementBtn.disabled = prose || !doc;
+  modeDrawBtn.disabled = prose || !doc;
+  modeSelectBtn.disabled = prose || !doc;
+  if (aiModeHint) aiModeHint.textContent = prose
+    ? 'Prose mode asks the model for simple plain-text edits: replace the caption or append text to it.'
+    : 'Targeted edit operations are enabled by default, so the model can return only bbox/element changes instead of a full recaption.';
+  updateProseStats();
+}
+function syncProseFromTextArea() {
+  if (captionText.value !== proseCaptionText.value) captionText.value = proseCaptionText.value;
+}
+function syncTextAreaFromProse() {
+  if (proseCaptionText.value !== captionText.value) proseCaptionText.value = captionText.value;
+  updateProseStats();
+}
+
 function setCaptionState(text) {
   originalText = text;
-  const r = C.parseCaptionDoc(text, { repair: autoRepairJson.checked });
-  doc = r.doc; plain = r.plain; parseError = r.error; parseRepaired = r.repaired; parseRepairKind = r.repairKind || "";
   selectedIdx = -1; hoverIdx = -1; pendingDrawIdx = null;
   setMode('select');
   undoStack = []; redoStack = [];
   rawDirtyPending = false;
+  if (isProseMode()) {
+    doc = null; plain = true; parseError = null; parseRepaired = false; parseRepairKind = '';
+    captionText.value = text;
+    proseCaptionText.value = text;
+    rawStatus.textContent = '';
+    updateCaptionModeUi();
+    switchTab('fields', true);
+    renderFieldsTop(); renderElements(); refreshIssues();
+    return;
+  }
+  const r = C.parseCaptionDoc(text, { repair: autoRepairJson.checked });
+  doc = r.doc; plain = r.plain; parseError = r.error; parseRepaired = r.repaired; parseRepairKind = r.repairKind || "";
   captionText.value = r.repairedText || text;
+  proseCaptionText.value = r.repairedText || text;
   rawStatus.textContent = '';
+  updateCaptionModeUi();
   switchTab(doc ? 'fields' : 'raw', true);
   renderFieldsTop(); renderElements(); refreshIssues();
 }
@@ -1559,6 +1610,7 @@ function nudgeSelected(dxUnits, dyUnits) {
 
 /* ---------------- raw tab ---------------- */
 function syncRawFromDoc() {
+  if (isProseMode()) { syncProseFromTextArea(); rawDirtyPending = false; return; }
   if (doc) captionText.value = C.serializeDoc(doc, saveFormat.value !== 'minified');
   rawDirtyPending = false;
 }
@@ -1572,9 +1624,16 @@ function switchTab(tab, force = false) {
   tabRawBtn.classList.toggle('active', tab === 'raw');
   fieldsPanel.classList.toggle('hidden', tab !== 'fields');
   rawPanel.classList.toggle('hidden', tab !== 'raw');
-  if (tab === 'raw' && doc && !rawDirtyPending) syncRawFromDoc();
+  if (tab === 'raw' && (doc || isProseMode()) && !rawDirtyPending) syncRawFromDoc();
 }
 function tryApplyRaw() {
+  if (isProseMode()) {
+    proseCaptionText.value = captionText.value;
+    doc = null; plain = true; parseError = null; rawDirtyPending = false;
+    rawStatus.textContent = 'Applied text.'; rawStatus.className = 'raw-status ok';
+    updateProseStats(); refreshIssues(); draw();
+    return true;
+  }
   const r = C.parseCaptionDoc(captionText.value, { repair: autoRepairJson.checked });
   if (r.doc) {
     pushUndoMaybe();
@@ -1616,7 +1675,22 @@ const liveRawParse = debounce(() => {
 captionText.addEventListener('input', () => {
   markDirty();
   rawDirtyPending = true;
+  if (isProseMode()) { proseCaptionText.value = captionText.value; updateProseStats(); }
   liveRawParse();
+});
+proseCaptionText.addEventListener('input', () => {
+  captionText.value = proseCaptionText.value;
+  doc = null; plain = true; parseError = null; rawDirtyPending = false;
+  updateProseStats();
+  markDirty();
+});
+proseAppendBlank.addEventListener('click', () => {
+  proseCaptionText.value = (proseCaptionText.value || '').replace(/\s*$/, '') + '\n\n';
+  proseCaptionText.focus();
+  proseCaptionText.selectionStart = proseCaptionText.selectionEnd = proseCaptionText.value.length;
+  captionText.value = proseCaptionText.value;
+  updateProseStats();
+  markDirty();
 });
 rawApplyBtn.addEventListener('click', () => { if (tryApplyRaw()) switchTab('fields'); });
 repairJsonBtn.addEventListener('click', () => {
@@ -1670,6 +1744,25 @@ Current caption JSON:
 User request:
 {user_request}`;
 
+const DEFAULT_PROSE_AI_PROMPT_TEMPLATE = `You edit a plain prose image caption.
+
+{response_format_instructions}
+
+Visual input:
+- original image = visual truth
+
+Rules:
+- Make only the requested change.
+- Preserve unrelated details and wording unless the request asks for a rewrite.
+- Prefer a complete replacement caption for rewrites and use append only when the user asks to add information.
+
+Filename: {filename}
+Current prose caption:
+{current_caption_text}
+
+User request:
+{user_request}`;
+
 const aiEditRequest = $('aiEditRequest'), aiAskBtn = $('aiAskBtn'), aiApplyBtn = $('aiApplyBtn'), aiDiscardBtn = $('aiDiscardBtn');
 const aiStatus = $('aiStatus'), aiRemoteWarning = $('aiRemoteWarning'), aiDiff = $('aiDiff'), aiRawWrap = $('aiRawWrap'), aiRawResponse = $('aiRawResponse');
 const aiReview = $('aiReview'), aiBeforeCanvas = $('aiBeforeCanvas'), aiAfterCanvas = $('aiAfterCanvas'), aiChangeList = $('aiChangeList');
@@ -1680,7 +1773,7 @@ const aiEnabled = $('aiEnabled'), aiBaseUrl = $('aiBaseUrl'), aiEndpointPath = $
 const aiMaxTokens = $('aiMaxTokens'), aiTemperature = $('aiTemperature'), aiTimeout = $('aiTimeout'), aiSendOriginal = $('aiSendOriginal');
 const aiSendOverlay = $('aiSendOverlay'), aiAutoApply = $('aiAutoApply'), aiSaveTraining = $('aiSaveTraining'), aiOverlayMax = $('aiOverlayMax');
 const aiIncludeRawJson = $('aiIncludeRawJson'), aiIncludePrettyJson = $('aiIncludePrettyJson'), aiIncludePromptTemplate = $('aiIncludePromptTemplate');
-const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn');
+const aiPromptTemplate = $('aiPromptTemplate'), aiResetPromptBtn = $('aiResetPromptBtn'), aiModeHint = $('aiModeHint');
 const aiBatchParallel = $('aiBatchParallel'), aiBatchReviewMode = $('aiBatchReviewMode'), aiBatchScope = $('aiBatchScope');
 const aiBatchStart = $('aiBatchStart'), aiBatchPause = $('aiBatchPause'), aiBatchResume = $('aiBatchResume'), aiBatchCancel = $('aiBatchCancel');
 const aiBatchAcceptAll = $('aiBatchAcceptAll'), aiBatchRejectAll = $('aiBatchRejectAll'), aiBatchRetryFailed = $('aiBatchRetryFailed');
@@ -1753,6 +1846,12 @@ function initAiPrefs() {
   updateAiRemoteWarning();
 }
 function aiResponseFormatInstructions() {
+  if (isProseMode()) {
+    return `IMPORTANT RESPONSE FORMAT:
+Return ONLY one JSON object. First character must be { and last must be }.
+Do not use markdown, code fences, comments, or explanation.
+Use {"edited_caption":"complete replacement caption"} to replace the caption, {"append":"text to append"} to add to it, or {"no_change":true} if no edit is needed.`;
+  }
   if (aiResponseMode.value === 'full') {
     return `IMPORTANT RESPONSE FORMAT:
 Return ONLY one JSON object. First character must be { and last must be }.
@@ -1768,7 +1867,7 @@ If no changes are needed, return {"caption_edits":[]} or an empty response.
 Full caption JSON is accepted only as a fallback.`;
 }
 function aiPromptForRequest() {
-  const base = aiPromptTemplate.value || DEFAULT_AI_PROMPT_TEMPLATE;
+  const base = isProseMode() ? DEFAULT_PROSE_AI_PROMPT_TEMPLATE : (aiPromptTemplate.value || DEFAULT_AI_PROMPT_TEMPLATE);
   const instructions = aiResponseFormatInstructions();
   return base.includes('{response_format_instructions}')
     ? base.replaceAll('{response_format_instructions}', instructions)
@@ -1778,6 +1877,11 @@ function aiValidationIssues() {
   return doc ? C.validateDoc(doc, coordMax()).map((x) => `${x.label}: ${x.msg}`) : [];
 }
 function summarizeAiDiff(before, after) {
+  if (typeof before === 'string' || typeof after === 'string') {
+    const bw = (String(before || '').trim().match(/\S+/g) || []).length;
+    const aw = (String(after || '').trim().match(/\S+/g) || []).length;
+    return `Prose caption changed from ${bw} to ${aw} words.`;
+  }
   const b = (before && C.getElements(before)) || [], a = (after && C.getElements(after)) || [];
   const lines = [];
   if (a.length > b.length) lines.push(`Added ${a.length - b.length} element(s).`);
@@ -2087,6 +2191,7 @@ function zoomAiOverlay(factor, center) {
   drawAiOverlayModal();
 }
 function renderAiReview(before, after, ops = null) {
+  if (typeof before === 'string' || typeof after === 'string') { aiReview.classList.add('hidden'); return; }
   if (!before || !after) { aiReview.classList.add('hidden'); return; }
   if (ops && ops.length) renderAiChangeListFromOps(before, ops);
   else renderAiChangeList(before, after);
@@ -2094,7 +2199,17 @@ function renderAiReview(before, after, ops = null) {
   requestAnimationFrame(() => { drawAiPreview(aiBeforeCanvas, before); drawAiPreview(aiAfterCanvas, after); });
 }
 function applyAiCaption(caption) {
-  if (!caption) return;
+  if (caption == null) return;
+  if (isProseMode()) {
+    proseCaptionText.value = String(caption);
+    captionText.value = proseCaptionText.value;
+    doc = null; plain = true; parseError = null; parseRepaired = false; parseRepairKind = '';
+    rawDirtyPending = false;
+    updateProseStats();
+    markDirty();
+    setMessage('Applied AI result as an unsaved prose edit.');
+    return;
+  }
   pushUndoMaybe();
   doc = cloneJson(caption);
   plain = false; parseError = null; parseRepaired = false; parseRepairKind = '';
@@ -2106,7 +2221,8 @@ function applyAiCaption(caption) {
   setMessage('Applied AI result as an unsaved edit.');
 }
 function applySelectedAiChanges() {
-  if (!pendingAiCaption) return;
+  if (pendingAiCaption == null) return;
+  if (isProseMode()) { applyAiCaption(pendingAiCaption); return; }
   applyAiCaption(pendingAiOps && pendingAiOps.length ? mergeSelectedAiOps(pendingAiBeforeCaption, pendingAiOps) : mergeSelectedAiCaption(pendingAiBeforeCaption, pendingAiCaption));
 }
 
@@ -2205,13 +2321,13 @@ function aiBatchItemsForScope() {
 async function runAiEditForRel(rel, requestText) {
   const itemData = await loadItemDataForRel(rel);
   const parsed = C.parseCaptionDoc(itemData.caption || '', { repair: autoRepairJson.checked });
-  if (!parsed.doc) return { rel, status: 'failed', error: parsed.error || 'Caption is not structured JSON.' };
-  const before = cloneJson(parsed.doc);
+  if (!isProseMode() && !parsed.doc) return { rel, status: 'failed', error: parsed.error || 'Caption is not structured JSON.' };
+  const before = isProseMode() ? (itemData.caption || '') : cloneJson(parsed.doc);
   const res = await fetch('/api/ai-edit-caption', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      image_path: rel, caption: before, user_request: requestText, coordinate_format: order(), coordinate_max: coordMax(),
-      selected_element_index: -1, validation_issues: C.validateDoc(before, coordMax()).map((x) => `${x.label}: ${x.msg}`),
+      image_path: rel, caption: before, caption_mode: isProseMode() ? 'prose' : 'ideogram4', user_request: requestText, coordinate_format: order(), coordinate_max: coordMax(),
+      selected_element_index: -1, validation_issues: isProseMode() ? [] : C.validateDoc(before, coordMax()).map((x) => `${x.label}: ${x.msg}`),
       settings: aiSettingsFromUi(), prompt_template: aiPromptForRequest()
     })
   });
@@ -2229,7 +2345,7 @@ async function runAiEditForRel(rel, requestText) {
 async function acceptAiBatchResult(r) {
   if (!r || !r.after || (r.status !== 'proposed' && r.status !== 'autosave')) return;
   try {
-    await saveCaptionForRel(r.rel, C.serializeDoc(r.after, saveFormat.value !== 'minified'));
+    await saveCaptionForRel(r.rel, isProseMode() ? String(r.after || '') : C.serializeDoc(r.after, saveFormat.value !== 'minified'));
     r.status = 'accepted';
     r.summary = 'Saved AI edit. ' + (r.summary || '');
     if (r.rel === activeRel) { dirty = false; await loadItem(activeRel); }
@@ -2308,18 +2424,18 @@ function clearAllAiBatchResults() {
 }
 async function askAiEdit() {
   if (!aiEnabled.checked) { aiStatus.textContent = 'AI Edit is disabled.'; aiStatus.className = 'raw-status error'; return; }
-  if (!activeRel || !doc) { aiStatus.textContent = 'Open a structured caption first.'; aiStatus.className = 'raw-status error'; return; }
+  if (!activeRel || (!doc && !isProseMode())) { aiStatus.textContent = isProseMode() ? 'Open a caption first.' : 'Open a structured caption first.'; aiStatus.className = 'raw-status error'; return; }
   const reqText = aiEditRequest.value.trim();
   if (!reqText) { aiStatus.textContent = 'Enter an edit request.'; aiStatus.className = 'raw-status error'; return; }
   updateAiRemoteWarning(); saveAiPrefs(); pendingAiCaption = null; pendingAiBeforeCaption = null; pendingAiOps = null;
   aiApplyBtn.classList.add('hidden'); aiDiscardBtn.classList.add('hidden'); aiDiff.classList.add('hidden'); aiRawWrap.classList.add('hidden'); aiReview.classList.add('hidden');
   aiAskBtn.disabled = true; aiStatus.textContent = 'Asking local model…'; aiStatus.className = 'raw-status';
-  const before = cloneJson(doc);
+  const before = isProseMode() ? (activeTab === 'raw' ? captionText.value : proseCaptionText.value) : cloneJson(doc);
   try {
     const res = await fetch('/api/ai-edit-caption', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        image_path: activeRel, caption: doc, user_request: reqText, coordinate_format: order(), coordinate_max: coordMax(),
+        image_path: activeRel, caption: before, caption_mode: isProseMode() ? 'prose' : 'ideogram4', user_request: reqText, coordinate_format: order(), coordinate_max: coordMax(),
         selected_element_index: selectedIdx, validation_issues: aiValidationIssues(), settings: aiSettingsFromUi(),
         prompt_template: aiPromptForRequest()
       })
@@ -2389,6 +2505,7 @@ for (const el of [aiEnabled, aiBaseUrl, aiEndpointPath, aiModel, aiResponseMode,
 
 /* ---------------- save ---------------- */
 function buildSaveText() {
+  if (isProseMode()) return activeTab === 'raw' ? captionText.value : proseCaptionText.value;
   if (doc && (activeTab === 'fields' || !rawDirtyPending)) {
     return C.serializeDoc(doc, saveFormat.value !== 'minified');
   }
@@ -2442,7 +2559,8 @@ async function saveCaption(markFixed = false) {
   if (out.error) { setMessage(out.error, true); return; }
   dirty = false; rawDirtyPending = false; updateDirtyUi();
   originalText = text;
-  if (doc) captionText.value = text;
+  if (isProseMode()) { captionText.value = text; proseCaptionText.value = text; updateProseStats(); }
+  else if (doc) captionText.value = text;
   const backupNote = out.backup ? ' Original backed up.' : '';
   setMessage((markFixed ? 'Saved and marked fixed.' : 'Saved.') + backupNote);
   await refreshList(true);
@@ -2524,6 +2642,18 @@ targetFolder.addEventListener('keydown', (e) => { if (e.key === 'Enter') openFol
 statusFilter.addEventListener('change', () => { refreshList(false); savePrefs(); });
 sortBy.addEventListener('change', () => { refreshList(true); savePrefs(); });
 recursive.addEventListener('change', () => { refreshList(true); savePrefs(); });
+captionMode.addEventListener('change', () => {
+  if (dirty && !confirm('Switch caption modes with unsaved changes? The current text will be preserved in the editor.')) {
+    captionMode.value = isProseMode() ? 'ideogram4' : 'prose';
+    return;
+  }
+  const text = activeTab === 'raw' ? captionText.value : currentCaptionText();
+  setCaptionState(text);
+  dirty = !!activeRel; updateDirtyUi();
+  if (dirty) setMessage('Caption mode changed; save to keep this text.');
+  savePrefs();
+  draw(); bDraw();
+});
 searchBox.addEventListener('input', () => { renderList(); savePrefs(); });
 ratingButtons.addEventListener('click', (ev) => {
   const btn = ev.target.closest('button[data-status]');

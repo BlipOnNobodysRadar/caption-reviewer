@@ -243,6 +243,46 @@ def save_ai_training_example(
     return {"dir": str(out_dir), **files}
 
 
+
+PROSE_AI_EDIT_INSTRUCTIONS = """Plain prose caption edit mode:
+- The caption is a normal text caption, not JSON.
+- Make only the requested change and preserve unrelated wording when appropriate.
+- Return ONLY JSON in one of these forms:
+  {"edited_caption":"complete replacement caption"}
+  {"replace":"complete replacement caption"}
+  {"append":"text to append to the existing caption"}
+  {"no_change":true}
+- Do not return markdown or explanations.
+"""
+
+def parse_ai_prose_response(text: str, current_caption: str) -> tuple[str | None, str | None, str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return current_caption, None, "no_change"
+    obj, parse_error = parse_ai_json_response(raw)
+    if parse_error:
+        # Prose models sometimes return only the caption despite instructions; accept
+        # non-JSON as a full replacement because prose captions are plain text.
+        if raw and not raw.startswith("{") and "```" not in raw:
+            return raw, None, "replace_text"
+        return None, parse_error, "invalid"
+    if isinstance(obj, str):
+        return obj, None, "replace"
+    if not isinstance(obj, dict):
+        return None, "Model response JSON must be an object, string, or plain replacement text.", "invalid"
+    if obj.get("no_change") is True:
+        return current_caption, None, "no_change"
+    for key in ("edited_caption", "caption", "replace", "replacement"):
+        if isinstance(obj.get(key), str):
+            return obj[key], None, key
+    if isinstance(obj.get("append"), str):
+        addition = obj["append"].strip()
+        if not addition:
+            return current_caption, None, "no_change"
+        sep = "" if not current_caption.strip() else ("\n\n" if obj.get("append_as_paragraph", True) else " ")
+        return current_caption.rstrip() + sep + addition, None, "append"
+    return None, "Model response did not include edited_caption, replace, append, or no_change.", "invalid"
+
 AI_EDIT_SCHEMA_INSTRUCTIONS = """Ideogram4 caption essentials:
 - Top-level object has high_level_description, style_description, compositional_deconstruction.background, and compositional_deconstruction.elements.
 - Elements are obj or text. obj needs desc. text needs exact visible text and desc.
@@ -903,7 +943,14 @@ def ai_edit_caption():
         return jsonify({"ok": False, "error": "Image file missing or unsupported."}), 404
 
     caption = data.get("caption")
-    if not isinstance(caption, dict):
+    caption_mode = str(data.get("caption_mode") or "ideogram4").strip().lower()
+    prose_mode = caption_mode == "prose"
+    if prose_mode:
+        if caption is None:
+            caption = ""
+        if not isinstance(caption, str):
+            return jsonify({"ok": False, "error": "Prose mode caption must be text."}), 400
+    elif not isinstance(caption, dict):
         return jsonify({"ok": False, "error": "Request caption must be a JSON object."}), 400
     user_request = str(data.get("user_request") or "").strip()
     if not user_request:
@@ -920,7 +967,7 @@ def ai_edit_caption():
     send_overlay = ai_bool(settings, "send_overlay_image", True)
     include_raw_json = ai_bool(settings, "include_raw_json", True)
     include_pretty_json = ai_bool(settings, "include_pretty_json", True)
-    include_prompt_template = ai_bool(settings, "include_prompt_template", True)
+    include_prompt_template = ai_bool(settings, "include_prompt_template", ai_bool(settings, "include_current_prompt_template", True))
     overlay_max_size = ai_int(settings, "overlay_max_size", 1400, 256, 4096)
     save_training_data = ai_bool(settings, "save_training_data", False)
 
@@ -929,18 +976,21 @@ def ai_edit_caption():
         coordinate_format = "yxyx"
     coordinate_max = ai_int({"coordinate_max": data.get("coordinate_max", 1000)}, "coordinate_max", 1000, 1, 100000)
     selected_idx = data.get("selected_element_index")
-    elems = extract_elements(caption)
+    elems = [] if prose_mode else extract_elements(caption)
     selected_summary = "none"
-    if isinstance(selected_idx, int) and 0 <= selected_idx < len(elems):
+    if not prose_mode and isinstance(selected_idx, int) and 0 <= selected_idx < len(elems):
         selected_summary = element_summary(elems[selected_idx], selected_idx)
 
-    current_caption_json = json.dumps(caption, indent=2 if include_pretty_json else None, ensure_ascii=False) if include_raw_json else "(omitted by settings)"
+    current_caption_json = json.dumps(caption, indent=2 if include_pretty_json else None, ensure_ascii=False) if include_raw_json and not prose_mode else "(omitted by settings)"
+    current_caption_text = str(caption) if prose_mode else ""
     validation_issues = data.get("validation_issues") or []
-    template = str(data.get("prompt_template") or "{user_request}\n\nCurrent caption JSON:\n{current_caption_json}")
-    prompt = fill_prompt_template(template if include_prompt_template else "{user_request}\n\nCurrent caption JSON:\n{current_caption_json}", {
+    default_template = "{user_request}\n\nCurrent prose caption:\n{current_caption_text}" if prose_mode else "{user_request}\n\nCurrent caption JSON:\n{current_caption_json}"
+    template = str(data.get("prompt_template") or default_template)
+    prompt = fill_prompt_template(template if include_prompt_template else default_template, {
         "user_request": user_request,
         "current_caption_json": current_caption_json,
-        "caption_schema_instructions": AI_EDIT_SCHEMA_INSTRUCTIONS,
+        "caption_schema_instructions": PROSE_AI_EDIT_INSTRUCTIONS if prose_mode else AI_EDIT_SCHEMA_INSTRUCTIONS,
+        "current_caption_text": current_caption_text,
         "filename": image_path.name,
         "coordinate_format": coordinate_format,
         "coordinate_max": coordinate_max,
@@ -955,7 +1005,7 @@ def ai_edit_caption():
     try:
         if send_original:
             content.append({"type": "image_url", "image_url": {"url": image_data_url(image_path, overlay_max_size)}})
-        if send_overlay:
+        if send_overlay and not prose_mode:
             overlay_bytes = render_caption_overlay(image_path, caption, coordinate_format, coordinate_max, overlay_max_size)
             overlay_generated = True
             content.append({"type": "image_url", "image_url": {"url": overlay_data_url(overlay_bytes)}})
@@ -981,6 +1031,14 @@ def ai_edit_caption():
         raw_model_response = extract_model_text(json.loads(response_text))
     except Exception:
         raw_model_response = response_text
+    if prose_mode:
+        edited, parse_error, response_mode = parse_ai_prose_response(raw_model_response, str(caption))
+        if parse_error:
+            return jsonify({"ok": False, "error": parse_error, "raw_model_response": raw_model_response, "validation": {"valid": False, "errors": [parse_error]}, "debug": {"llamacpp_url": url, "overlay_generated": overlay_generated, "response_mode": response_mode, "caption_mode": "prose"}}), 422
+        validation = {"valid": True, "warnings": [], "errors": []}
+        training_saved = None
+        return jsonify({"ok": True, "caption": edited, "no_change": response_mode == "no_change" or edited == caption, "raw_model_response": raw_model_response, "validation": validation, "training_saved": training_saved, "debug": {"overlay_generated": overlay_generated, "llamacpp_url": url, "response_mode": response_mode, "caption_mode": "prose"}})
+
     edited, parse_error, response_mode = parse_ai_caption_response(raw_model_response, caption)
     if parse_error:
         return jsonify({"ok": False, "error": parse_error, "raw_model_response": raw_model_response, "validation": {"valid": False, "errors": [parse_error]}, "debug": {"llamacpp_url": url, "overlay_generated": overlay_generated, "response_mode": response_mode}}), 422
