@@ -7,3 +7,5 @@ venv/
 .DS_Store
 Thumbs.db
 .caption_review_state.json.tmp
+
+.caption_reviewer_user/

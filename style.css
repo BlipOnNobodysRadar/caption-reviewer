@@ -607,3 +607,33 @@ body.dirty .active-name::after {
   .goal-stats { max-width: 45%; }
   .goal-expanded { padding-left: 8px; }
 }
+
+/* Prose caption mode: keep the image review flow, but de-emphasize bbox-only tools. */
+body.prose-mode .toolstrip .tool-group:first-child,
+body.prose-mode .toolstrip .tool-group.toggles,
+body.prose-mode .toolstrip .tool-group.problem-nav,
+body.prose-mode #issuesChip,
+body.prose-mode #coordReadout {
+  display: none;
+}
+.prose-panel textarea {
+  width: 100%;
+  min-height: 38vh;
+  line-height: 1.45;
+  resize: vertical;
+}
+.prose-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.compact-fld { margin-top: 6px; }
+.preset-row {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.preset-row .fld { flex: 1 1 220px; }
+.preset-row select { width: 100%; }

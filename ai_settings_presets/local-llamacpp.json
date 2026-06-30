@@ -1,0 +1,26 @@
+{
+  "id": "local-llamacpp",
+  "name": "Local llama.cpp default",
+  "settings": {
+    "enabled": true,
+    "baseUrl": "http://localhost:8080",
+    "endpointPath": "/v1/chat/completions",
+    "model": "local-model",
+    "responseMode": "ops",
+    "maxTokens": "8192",
+    "temperature": "0.1",
+    "timeout": "120",
+    "sendOriginal": true,
+    "sendOverlay": true,
+    "autoApply": false,
+    "saveTraining": false,
+    "overlayMax": "1400",
+    "includeRawJson": true,
+    "includePrettyJson": true,
+    "includePromptTemplate": true,
+    "batchParallel": "4",
+    "batchReviewMode": "review",
+    "batchScope": "all",
+    "batchFilter": "all"
+  }
+}
